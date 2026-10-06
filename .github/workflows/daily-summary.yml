@@ -1,0 +1,87 @@
+name: daily-summary
+
+# Sends a daily paper-trading summary to Telegram.
+# Needs two repository secrets: TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.
+on:
+  schedule:
+    - cron: "40 12 * * *"   # 12:40 UTC = 8:40am EDT / 7:40am EST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - name: Build and send summary
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DASHBOARD_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
+        run: |
+          python - <<'PY'
+          import os, sqlite3, requests
+          from datetime import datetime, timedelta, timezone
+          from kalshi_weather.dashboard import BACKTEST
+
+          token, chat = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
+          if not token or not chat:
+              raise SystemExit("Add TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID as repository secrets.")
+
+          now = datetime.now(timezone.utc)
+          since = (now - timedelta(days=1)).isoformat()
+          lines = [f"Kalshi weather paper trading - {now:%b %d}"]
+
+          if not os.path.exists("ledger/paper.db"):
+              lines.append("No trades recorded yet.")
+          else:
+              db = sqlite3.connect("ledger/paper.db")
+              q = lambda s, *a: db.execute(s, a).fetchone()
+              opened, settled_24h, pnl_24h, losses_24h = q(
+                  "SELECT (SELECT COUNT(*) FROM trades WHERE opened_at >= ?),"
+                  " COUNT(*), COALESCE(SUM(pnl),0), COALESCE(SUM(result != side),0)"
+                  " FROM trades WHERE status='settled' AND settled_at >= ?", since, since)
+              tot, tot_pnl, tot_losses, tot_contracts, open_n = q(
+                  "SELECT COUNT(*), COALESCE(SUM(pnl),0), COALESCE(SUM(result != side),0),"
+                  " COALESCE(SUM(contracts),0),"
+                  " (SELECT COUNT(*) FROM trades WHERE status='open')"
+                  " FROM trades WHERE status='settled'")
+              lines += [
+                  "",
+                  f"Last 24h: {opened} new trades, {settled_24h} settled, {losses_24h} losses, P&L ${pnl_24h:+.2f}",
+                  f"All time: {tot} settled ({open_n} open), {tot_losses} losses, P&L ${tot_pnl:+.2f}",
+                  f"Progress to 1,500 trades: {tot / 1500:.0%}",
+                  "",
+                  "By variant (live vs backtest, cents per contract):",
+              ]
+              rows = db.execute(
+                  "SELECT strategy, COUNT(*), SUM(pnl), SUM(contracts), SUM(result != side)"
+                  " FROM trades WHERE status='settled' GROUP BY strategy ORDER BY strategy").fetchall()
+              if not rows:
+                  lines.append("  nothing settled yet")
+              for name, n, pnl, contracts, losses in rows:
+                  live = 100 * pnl / contracts if contracts else 0
+                  bt = BACKTEST.get(name)
+                  bt_txt = f"{bt[0]:+.2f}" if bt else "n/a"
+                  flag = " (below backtest range)" if bt and n >= 30 and live < bt[1] else ""
+                  lines.append(f"  {name}: {n} trades, {losses} losses, {live:+.2f} vs {bt_txt}{flag}")
+              stopped = db.execute(
+                  "SELECT strategy, reason FROM brain_state WHERE status='stopped'").fetchall() \
+                  if db.execute("SELECT 1 FROM sqlite_master WHERE name='brain_state'").fetchone() else []
+              for name, reason in stopped:
+                  lines.append(f"STOPPED: {name} - {reason}")
+
+          lines += ["", os.environ["DASHBOARD_URL"]]
+          r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                            data={"chat_id": chat, "text": "\n".join(lines),
+                                  "disable_web_page_preview": "true"}, timeout=20)
+          print(r.status_code, r.text[:200])
+          r.raise_for_status()
+          PY
