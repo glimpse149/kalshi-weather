@@ -46,7 +46,7 @@ class LiveError(RuntimeError):
 
 
 class AuthClient:
-    """Signed Kalshi trade-api v2 calls (RSA-PSS SHA256 over timestamp + METHOD + path)."""
+    """Signed Kalshi trade-api v2 calls: timestamp + METHOD + path, signed with Ed25519 or RSA-PSS."""
 
     def __init__(self, base_url: str, key_id: str, private_key_pem: str, session=None):
         from cryptography.hazmat.primitives import serialization
@@ -62,8 +62,12 @@ class AuthClient:
         from cryptography.hazmat.primitives.asymmetric import padding
         ts = str(int(time.time() * 1000))
         msg = (ts + method.upper() + self.prefix + path.split("?")[0]).encode()
-        sig = self.key.sign(msg, padding.PSS(mgf=padding.MGF1(hashes.SHA256()),
-                                             salt_length=padding.PSS.DIGEST_LENGTH), hashes.SHA256())
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        if isinstance(self.key, Ed25519PrivateKey):      # newer Kalshi keys
+            sig = self.key.sign(msg)
+        else:                                            # RSA keys: PSS with SHA-256
+            sig = self.key.sign(msg, padding.PSS(mgf=padding.MGF1(hashes.SHA256()),
+                                                 salt_length=padding.PSS.DIGEST_LENGTH), hashes.SHA256())
         return {"KALSHI-ACCESS-KEY": self.key_id, "KALSHI-ACCESS-TIMESTAMP": ts,
                 "KALSHI-ACCESS-SIGNATURE": base64.b64encode(sig).decode(),
                 "Content-Type": "application/json"}
