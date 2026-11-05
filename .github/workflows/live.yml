@@ -1,0 +1,50 @@
+name: live-trade
+
+# Real-money longshot orders (see kalshi_weather/live.py for the rules and safety limits).
+# Runs twice an hour; only acts in cities where it is 5pm local, and never buys a ticker twice.
+# Repository variables:  LIVE_MODE = off | demo | live   (default off = dry run, no orders)
+#                        LIVE_START_EQUITY = account value the $25 loss limit counts from
+# Secrets: KALSHI_API_KEY_ID + KALSHI_PRIVATE_KEY (live), KALSHI_DEMO_KEY_ID + KALSHI_DEMO_PRIVATE_KEY (demo)
+on:
+  schedule:
+    - cron: "12,42 * * * *"
+  workflow_dispatch:
+    inputs:
+      check:
+        description: "Only test the API keys and send account status to Telegram"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live
+  cancel-in-progress: false
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      LIVE_MODE: ${{ vars.LIVE_MODE || 'off' }}
+      LIVE_START_EQUITY: ${{ vars.LIVE_START_EQUITY }}
+      KALSHI_API_KEY_ID: ${{ secrets.KALSHI_API_KEY_ID }}
+      KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}
+      KALSHI_DEMO_KEY_ID: ${{ secrets.KALSHI_DEMO_KEY_ID }}
+      KALSHI_DEMO_PRIVATE_KEY: ${{ secrets.KALSHI_DEMO_PRIVATE_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Check keys
+        if: github.event_name == 'workflow_dispatch' && inputs.check
+        run: python -m kalshi_weather live --check
+      - name: Trade (dry run unless LIVE_MODE is demo or live)
+        if: github.event_name == 'schedule' || !inputs.check
+        run: python -m kalshi_weather live ${{ github.event_name == 'schedule' && '--scheduled' || '' }}
