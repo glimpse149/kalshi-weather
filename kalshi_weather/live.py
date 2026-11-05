@@ -118,10 +118,22 @@ class AuthClient:
         return self.request("GET", "/portfolio/orders", params={"status": "resting", "limit": 200}).get("orders") or []
 
     def buy_no(self, ticker: str, no_cents: int, count: int) -> dict:
-        body = {"ticker": ticker, "action": "buy", "side": "no", "type": "limit", "count": int(count),
-                "no_price": int(no_cents), "client_order_id": f"kw-{uuid.uuid4().hex[:16]}",
-                "expiration_ts": int(time.time()) + ORDER_TTL}
-        return self.request("POST", "/portfolio/orders", body=body).get("order") or {}
+        """Buy NO at no_cents via Kalshi's V2 order endpoint.
+
+        V2 quotes everything on the YES book: buying NO at P is selling YES (side "ask")
+        at 1 - P. The limit order rests at most ORDER_TTL seconds.
+        """
+        body = {"ticker": ticker, "side": "ask", "count": str(int(count)),
+                "price": f"{(100 - int(no_cents)) / 100:.2f}",
+                "time_in_force": "good_till_canceled", "expiration_time": int(time.time()) + ORDER_TTL,
+                "self_trade_prevention_type": "taker_at_cross",
+                "client_order_id": f"kw-{uuid.uuid4().hex[:16]}"}
+        d = self.request("POST", "/portfolio/events/orders", body=body)
+        o = d.get("order") or d
+        filled = _num(o, "fill_count", "fill_count_fp")
+        left = _num(o, "remaining_count", "remaining_count_fp")
+        o["status"] = o.get("status") or (f"filled {filled:g}" + (f", {left:g} resting" if left else ""))
+        return o
 
 
 def _cents(d: dict, name: str) -> float:
@@ -236,6 +248,7 @@ def run(mode: str, market, auth: AuthClient | None = None, cities=None, now=None
                      f"Review, then raise LIVE_START_EQUITY to re-arm.")
         return result
     held = held_tickers(positions, orders)
+    errors = []
     per_event = {}
     for t in held:
         per_event[event_of(t)] = per_event.get(event_of(t), 0) + 1
@@ -254,8 +267,8 @@ def run(mode: str, market, auth: AuthClient | None = None, cities=None, now=None
             o = auth.buy_no(p["ticker"], p["no_cents"], p["count"])
         except LiveError as e:
             result["skipped"].append((p["ticker"], "order error"))
+            errors.append(f"{p['ticker']}: {str(e)[:160]}")
             log(f"ORDER ERROR {p['ticker']}: {e}")
-            telegram(f"Kalshi live bot order error on {p['ticker']}: {str(e)[:200]}")
             continue
         held.add(p["ticker"])
         per_event[ev] = per_event.get(ev, 0) + 1
@@ -265,6 +278,9 @@ def run(mode: str, market, auth: AuthClient | None = None, cities=None, now=None
     if result["placed"]:
         lines = [f"{x['count']}x NO {x['ticker']} @ {x['no_cents']}c ({x['status']})" for x in result["placed"]]
         telegram(f"Kalshi {mode} bot placed {len(lines)} order(s):\n" + "\n".join(lines))
+    if errors:      # one message per run, not one per order
+        telegram(f"Kalshi {mode} bot: {len(errors)} order(s) failed, nothing bought for them.\n"
+                 + "\n".join(errors[:3]) + (f"\n...and {len(errors) - 3} more" if len(errors) > 3 else ""))
     return result
 
 
@@ -297,12 +313,14 @@ def trade_results(fills: list[dict], settlements: list[dict], now=None) -> dict:
     cost, bought = {}, {}
     new_24h = set()
     for f in fills:
-        if (f.get("action") or "buy") != "buy":
+        # The bot only buys NO: on the V2 book that is a YES "ask"; older fills say side "no".
+        if not (f.get("book_side") == "ask" or (f.get("outcome_side") or f.get("side") or "").lower() == "no"):
             continue
-        n = _num(f, "count", "count_fp")
+        n = _num(f, "count_fp", "count")
         price = _num(f, "no_price_dollars") or _num(f, "no_price") / 100.0
+        fee = _num(f, "fee_cost") if f.get("fee_cost") not in (None, "") else (taker_fee(price, int(n)) if n else 0.0)
         t = f.get("ticker") or f.get("market_ticker")
-        cost[t] = cost.get(t, 0.0) + n * price + (taker_fee(price, int(n)) if n else 0.0)
+        cost[t] = cost.get(t, 0.0) + n * price + fee
         bought[t] = bought.get(t, 0) + n
         w = _when(f, "created_time", "ts")
         if w and w >= day_ago:
