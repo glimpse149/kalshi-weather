@@ -24,6 +24,7 @@ class LongshotConfig:
     contracts: int = 10
     fee_rate: float = 0.07
     max_yes_ask: float | None = None   # if set, skip brackets whose YES ask is missing or above this
+    highs_only: bool = False           # forward variants: trade only daily-high series
 
 
 # Variants: the same rule at different local hours on the day before the event.
@@ -43,6 +44,12 @@ VARIANTS = {f"longshot_{label}": LongshotConfig(name=f"longshot_{label}", hour=h
 # market. This variant needs a YES ask of 10c or less and is judged only on paper
 # trades placed from now on, never on the data that suggested it.
 FORWARD = {"longshot41_5pm": LongshotConfig(name="longshot41_5pm", hour=17, max_yes_ask=0.10)}
+
+# Forward test, registered 2026-11-04: in longshot41_5pm's first month, all 6 losses came
+# from daily-low series and the 258 daily-high trades lost none. That was seen after the
+# fact, so this highs-only copy is judged only on paper trades from now on.
+FORWARD["longshot41h_5pm"] = LongshotConfig(name="longshot41h_5pm", hour=17, max_yes_ask=0.10,
+                                            highs_only=True)
 
 
 def due_cities(cities, hour: int, now=None) -> list:
