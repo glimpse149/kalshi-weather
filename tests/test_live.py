@@ -164,6 +164,45 @@ def test_city_day_cap_counts_earlier_runs():
     assert [t for t, _, _ in a.sent] == [f"{EV}-B2.5"]                  # 2 held + 1 new = cap of 3
 
 
+def test_v2_order_body_sells_yes_at_complement():
+    class S:
+        def request(self, method, url, params=None, json=None, headers=None, timeout=None):
+            S.sent = (method, url, json)
+            class R:
+                status_code, content = 201, b"x"
+                def json(self):
+                    return {"order_id": "o1", "fill_count": "10.00", "remaining_count": "0.00"}
+            return R()
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    pem = Ed25519PrivateKey.generate().private_bytes(serialization.Encoding.PEM,
+                                                     serialization.PrivateFormat.PKCS8,
+                                                     serialization.NoEncryption()).decode()
+    c = live.AuthClient("https://api.elections.kalshi.com/trade-api/v2", "k", pem, session=S())
+    o = c.buy_no("KXHIGHNY-26NOV05-B74.5", 98, 10)
+    method, url, body = S.sent
+    assert method == "POST" and url.endswith("/trade-api/v2/portfolio/events/orders")
+    assert body["side"] == "ask" and body["price"] == "0.02" and body["count"] == "10"
+    assert body["time_in_force"] == "good_till_canceled" and body["expiration_time"] > 0
+    assert o["status"] == "filled 10" and o["order_id"] == "o1"
+
+
+def test_errors_sent_as_one_message(monkeypatch):
+    sent = []
+    monkeypatch.setattr(live, "telegram", sent.append)
+    a = FakeAuth(fail=(f"{EV}-B0.5", f"{EV}-B1.5", f"{EV}-B2.5"))
+    live.run("live", FakeMarket(books()), a, cities=nyc(), now=NOW, start_equity=150, log=lambda *_: None)
+    assert len(sent) == 1 and "3 order(s) failed" in sent[0]
+
+
+def test_v2_fills_count_as_no_purchases():
+    fills = [{"ticker": "A", "book_side": "ask", "outcome_side": "yes", "action": "sell", "count_fp": "10.00",
+              "no_price_dollars": "0.9800", "yes_price_dollars": "0.0200", "fee_cost": "0.0200",
+              "created_time": "2026-11-04T22:01:00Z"}]
+    st = [{"ticker": "A", "market_result": "no", "revenue": 1000, "settled_time": "2026-11-05T12:00:00Z"}]
+    r = live.trade_results(fills, st, now=NOW.replace(day=5, hour=13))
+    assert r["all"] == {"settled": 1, "losses": 0, "pnl": 0.18}
+
+
 def test_order_error_is_skipped_not_fatal():
     a = FakeAuth(fail=(f"{EV}-B0.5",))
     r = live.run("live", FakeMarket(books()), a, cities=nyc(), now=NOW, start_equity=150, log=lambda *_: None)
