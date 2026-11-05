@@ -1,7 +1,9 @@
 """Real-money longshot trading on Kalshi, with hard safety limits.
 
-Rule (same as the longshot_5pm paper variant): at 5pm local the day before, buy NO on
+Rule (the longshot paper rule): between 5pm and 9:59pm local the day before, buy NO on
 every bracket whose best YES bid is 1-4c, at 1 - YES bid, 10 contracts, in six cities.
+Backtest by hour (c/contract): 5pm +1.09, 7pm +1.02, 9pm +0.83. The wide window is there
+because GitHub's scheduled runs can be hours late; each bracket is still bought only once.
 
 Modes, set by the LIVE_MODE environment variable:
   off  (default) dry run: reads real prices, prints what it would buy, places nothing
@@ -10,7 +12,7 @@ Modes, set by the LIVE_MODE environment variable:
 
 Safety limits (all enforced here, not by settings):
   - 10 contracts per order max, NO price 96-99c only, limit orders that expire in 5 minutes
-  - at most 3 orders per city per day, never a second order on a ticker already held
+  - at most 3 brackets per city per day (counting earlier runs), never a ticker already held
   - total money in open positions capped at $130
   - stop: no new orders once equity (cash + open positions at cost) falls $25 below
     LIVE_START_EQUITY. Raise LIVE_START_EQUITY by hand to re-arm after reviewing.
@@ -32,7 +34,8 @@ import requests
 from .config import CITIES, KALSHI_DEMO, KALSHI_PROD
 
 LIVE_CITIES = ("nyc", "chi", "den", "lax", "aus", "phl")   # Miami stays on paper
-LIVE_HOUR = 17
+LIVE_HOUR = 17                 # window start, local time
+LIVE_LAST_HOUR = 21            # window end: trades up to 9:59pm local
 CONTRACTS = 10
 MAX_ORDERS_PER_CITY_DAY = 3
 MAX_OPEN_COST = 130.0          # dollars tied up in open positions
@@ -169,6 +172,17 @@ def telegram(text: str) -> None:
         print(f"telegram send failed: {type(e).__name__}")
 
 
+def in_window(cities, now=None) -> list:
+    """Cities where the local time is between LIVE_HOUR:00 and LIVE_LAST_HOUR:59."""
+    now = now or datetime.now(timezone.utc)
+    return [c for c in cities if LIVE_HOUR <= now.astimezone(ZoneInfo(c.tz)).hour <= LIVE_LAST_HOUR]
+
+
+def event_of(ticker: str) -> str:
+    """KXHIGHNY-26NOV05-B74.5 -> KXHIGHNY-26NOV05"""
+    return ticker.rsplit("-", 1)[0]
+
+
 def plan_orders(market, cities, now=None, log=print) -> list[dict]:
     """Longshot brackets to buy right now in the cities given (public data only)."""
     from .kalshi import event_date
@@ -222,9 +236,14 @@ def run(mode: str, market, auth: AuthClient | None = None, cities=None, now=None
                      f"Review, then raise LIVE_START_EQUITY to re-arm.")
         return result
     held = held_tickers(positions, orders)
+    per_event = {}
+    for t in held:
+        per_event[event_of(t)] = per_event.get(event_of(t), 0) + 1
     for p in plan:
         cost = p["count"] * p["no_cents"] / 100.0 + p["fee"]
+        ev = event_of(p["ticker"])
         why = ("already held" if p["ticker"] in held else
+               "city-day cap" if per_event.get(ev, 0) >= MAX_ORDERS_PER_CITY_DAY else
                "open-cost cap" if tied + cost > MAX_OPEN_COST else
                "not enough cash" if cash < cost + 1.0 else None)
         if why:
@@ -239,6 +258,7 @@ def run(mode: str, market, auth: AuthClient | None = None, cities=None, now=None
             telegram(f"Kalshi live bot order error on {p['ticker']}: {str(e)[:200]}")
             continue
         held.add(p["ticker"])
+        per_event[ev] = per_event.get(ev, 0) + 1
         tied, cash = tied + cost, cash - cost
         result["placed"].append({**p, "status": o.get("status"), "order_id": o.get("order_id")})
         log(f"ORDER {mode.upper()} buy {p['count']}x NO {p['ticker']} @ {p['no_cents']}c -> {o.get('status')}")
