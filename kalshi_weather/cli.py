@@ -136,7 +136,7 @@ def main(argv=None):
     br.add_argument("--alerts", default=None, help="write newly-stopped strategies to this file")
     br.add_argument("--revive", default=None, help="put a stopped strategy back into evaluation")
     lv = sub.add_parser("live", help="real-money longshot orders (LIVE_MODE=off|demo|live)")
-    lv.add_argument("--scheduled", action="store_true", help="only cities at 5pm local right now")
+    lv.add_argument("--scheduled", action="store_true", help="only cities inside the 5-9pm local window")
     lv.add_argument("--check", action="store_true", help="test the API keys and print account status")
     db = sub.add_parser("dashboard", help="write an HTML dashboard of the paper ledger")
     db.add_argument("--out", default="site/index.html")
@@ -149,8 +149,7 @@ def main(argv=None):
     kalshi = KalshiClient(KALSHI_PROD, cache_dir=f"{a.data}/cache")
 
     if a.cmd == "live":
-        from .live import LIVE_CITIES, LIVE_HOUR, from_env, run, status
-        from .longshot import due_cities
+        from .live import LIVE_CITIES, LIVE_HOUR, LIVE_LAST_HOUR, from_env, in_window, run, status
         try:
             mode, auth, start = from_env()
         except Exception as e:   # bad or missing keys: say so plainly, never print the key
@@ -172,12 +171,12 @@ def main(argv=None):
         market = KalshiClient(auth.base_url if auth else KALSHI_PROD)
         cities = [CITIES[k] for k in LIVE_CITIES]
         if not a.scheduled and mode == "live":
-            print("live: real-money orders only run on schedule (5pm local); use --scheduled")
+            print("live: real-money orders only run inside the 5-9pm window; use --scheduled")
             return
         if a.scheduled:
-            cities = due_cities(cities, LIVE_HOUR)
+            cities = in_window(cities)
             if not cities:
-                print(f"live: no live city is at {LIVE_HOUR}:00 local right now")
+                print(f"live: no live city is between {LIVE_HOUR}:00 and {LIVE_LAST_HOUR}:59 local right now")
                 return
         r = run(mode, market, auth, cities=cities, start_equity=start)
         print(f"live ({mode}): {r['planned']} planned, {len(r['placed'])} placed, "
