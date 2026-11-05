@@ -95,6 +95,22 @@ class AuthClient:
             if not cursor:
                 return out
 
+    def _paged(self, path: str, key: str, params: dict | None = None) -> list[dict]:
+        out, cursor = [], None
+        while True:
+            q = {"limit": 200, **(params or {}), **({"cursor": cursor} if cursor else {})}
+            d = self.request("GET", path, params=q)
+            out += d.get(key) or []
+            cursor = d.get("cursor")
+            if not cursor:
+                return out
+
+    def fills(self) -> list[dict]:
+        return self._paged("/portfolio/fills", "fills")
+
+    def settlements(self) -> list[dict]:
+        return self._paged("/portfolio/settlements", "settlements")
+
     def resting_orders(self) -> list[dict]:
         return self.request("GET", "/portfolio/orders", params={"status": "resting", "limit": 200}).get("orders") or []
 
@@ -232,19 +248,72 @@ def run(mode: str, market, auth: AuthClient | None = None, cities=None, now=None
     return result
 
 
+def _num(d: dict, *names) -> float:
+    for n in names:
+        if d.get(n) not in (None, ""):
+            return float(d[n])
+    return 0.0
+
+
+def _when(d: dict, *names) -> datetime | None:
+    for n in names:
+        v = d.get(n)
+        if v in (None, ""):
+            continue
+        if isinstance(v, (int, float)):
+            return datetime.fromtimestamp(v, timezone.utc)
+        return datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+    return None
+
+
+def trade_results(fills: list[dict], settlements: list[dict], now=None) -> dict:
+    """Per-trade live results from Kalshi fills (cost) and settlements (payout).
+
+    One trade = one settled market we bought NO in. P&L = payout - price paid - taker fee.
+    """
+    from .strategy import taker_fee
+    now = now or datetime.now(timezone.utc)
+    day_ago = now - timedelta(days=1)
+    cost, bought = {}, {}
+    new_24h = set()
+    for f in fills:
+        if (f.get("action") or "buy") != "buy":
+            continue
+        n = _num(f, "count", "count_fp")
+        price = _num(f, "no_price_dollars") or _num(f, "no_price") / 100.0
+        t = f.get("ticker") or f.get("market_ticker")
+        cost[t] = cost.get(t, 0.0) + n * price + (taker_fee(price, int(n)) if n else 0.0)
+        bought[t] = bought.get(t, 0) + n
+        w = _when(f, "created_time", "ts")
+        if w and w >= day_ago:
+            new_24h.add(t)
+    rows = []
+    for s in settlements:
+        t = s.get("ticker") or s.get("market_ticker")
+        if t not in cost:
+            continue                     # not a trade this bot made
+        result = (s.get("market_result") or s.get("result") or "").lower()
+        payout = _num(s, "revenue_dollars") or _num(s, "revenue") / 100.0
+        rows.append({"ticker": t, "lost": result == "yes", "pnl": round(payout - cost[t], 2),
+                     "at": _when(s, "settled_time", "ts")})
+    recent = [r for r in rows if r["at"] and r["at"] >= day_ago]
+    pack = lambda rs: {"settled": len(rs), "losses": sum(r["lost"] for r in rs),
+                       "pnl": round(sum(r["pnl"] for r in rs), 2)}
+    return {"day": {**pack(recent), "new": len(new_24h)}, "all": pack(rows)}
+
+
 def status(mode: str, auth: AuthClient, start_equity: float | None) -> dict:
-    """Account snapshot for the daily summary."""
+    """Account snapshot plus per-trade results, for the daily summary."""
     positions = auth.positions()
     cash, tied = auth.balance(), open_cost(positions)
-    since = int((datetime.now(timezone.utc) - timedelta(days=1)).timestamp())
     try:
-        settled = auth.request("GET", "/portfolio/settlements", params={"min_ts": since, "limit": 200}).get("settlements") or []
+        results = trade_results(auth.fills(), auth.settlements())
     except LiveError:
-        settled = []
+        results = None
     eq = cash + tied
     return {"mode": mode, "cash": round(cash, 2), "open_cost": tied, "equity": round(eq, 2),
             "open_positions": sum(1 for p in positions if float(p.get("position") or p.get("position_fp") or 0)),
-            "settled_24h": len(settled),
+            "results": results,
             "pnl": None if start_equity is None else round(eq - start_equity, 2),
             "stopped": start_equity is not None and eq < start_equity - STOP_LOSS}
 
