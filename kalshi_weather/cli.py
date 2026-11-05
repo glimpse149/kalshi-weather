@@ -135,6 +135,9 @@ def main(argv=None):
     br = sub.add_parser("brain", help="review strategies: edge estimates, status, sizing")
     br.add_argument("--alerts", default=None, help="write newly-stopped strategies to this file")
     br.add_argument("--revive", default=None, help="put a stopped strategy back into evaluation")
+    lv = sub.add_parser("live", help="real-money longshot orders (LIVE_MODE=off|demo|live)")
+    lv.add_argument("--scheduled", action="store_true", help="only cities at 5pm local right now")
+    lv.add_argument("--check", action="store_true", help="test the API keys and print account status")
     db = sub.add_parser("dashboard", help="write an HTML dashboard of the paper ledger")
     db.add_argument("--out", default="site/index.html")
     db.add_argument("--repo-url", default="")
@@ -144,6 +147,42 @@ def main(argv=None):
     from .kalshi import KalshiClient
     from .weather import WeatherClient
     kalshi = KalshiClient(KALSHI_PROD, cache_dir=f"{a.data}/cache")
+
+    if a.cmd == "live":
+        from .live import LIVE_CITIES, LIVE_HOUR, from_env, run, status
+        from .longshot import due_cities
+        try:
+            mode, auth, start = from_env()
+        except Exception as e:   # bad or missing keys: say so plainly, never print the key
+            from .live import telegram
+            msg = f"live: could not load Kalshi keys ({type(e).__name__}: {str(e)[:120]})"
+            print(msg)
+            telegram("Kalshi bot: " + msg)
+            raise SystemExit(1)
+        if a.check:
+            if auth is None:
+                print("LIVE_MODE is off: nothing to check")
+                return
+            s = status(mode, auth, start)
+            print(f"{mode}: API keys OK, {s['open_positions']} open position(s)")
+            from .live import telegram
+            telegram(f"Kalshi {mode} check OK: cash ${s['cash']:.2f}, open ${s['open_cost']:.2f}, "
+                     f"equity ${s['equity']:.2f}" + (f", P&L ${s['pnl']:+.2f}" if s["pnl"] is not None else ""))
+            return
+        market = KalshiClient(auth.base_url if auth else KALSHI_PROD)
+        cities = [CITIES[k] for k in LIVE_CITIES]
+        if not a.scheduled and mode == "live":
+            print("live: real-money orders only run on schedule (5pm local); use --scheduled")
+            return
+        if a.scheduled:
+            cities = due_cities(cities, LIVE_HOUR)
+            if not cities:
+                print(f"live: no live city is at {LIVE_HOUR}:00 local right now")
+                return
+        r = run(mode, market, auth, cities=cities, start_equity=start)
+        print(f"live ({mode}): {r['planned']} planned, {len(r['placed'])} placed, "
+              f"{len(r['skipped'])} skipped" + (" - STOPPED" if r["stopped"] else ""))
+        return
 
     if a.cmd == "discover":
         for s in KalshiClient(KALSHI_PROD).series_list("Climate and Weather"):
@@ -217,7 +256,7 @@ def main(argv=None):
         from .mm import MAKER_HOUR, MAKER_STRATEGY, check_fills, run_maker_paper
         print("fills:", check_fills(kalshi, ledger))
         from .longshot import VARIANTS
-        size = Brain(ledger).sized(MAKER_STRATEGY, 0.97, list(VARIANTS) + [MAKER_STRATEGY])
+        size = 10 if Brain(ledger).contracts(MAKER_STRATEGY, 0.97) else 0   # flat size; 0 = stopped
         ms = [MARKETS[k] for k in ORIGINAL]
         todo = due_cities(ms, MAKER_HOUR) if a.scheduled else ms
         if size and todo:
@@ -240,7 +279,7 @@ def main(argv=None):
     if a.cmd == "paper" and a.strategy == "poly":
         from .brain import Brain
         from .polymarket import POLY_STRATEGY, clients, run_poly_paper
-        size = Brain(ledger).contracts(POLY_STRATEGY, 0.97)
+        size = 10 if Brain(ledger).contracts(POLY_STRATEGY, 0.97) else 0
         if not size:
             print(f"{POLY_STRATEGY}: stopped by the brain")
             return
@@ -258,7 +297,7 @@ def main(argv=None):
             raise SystemExit(f"unknown variant; choose from {list(VARIANTS)} or all")
         placed = []
         for n in names:
-            size = brain.sized(n, 0.97, list(VARIANTS) + ["maker_5pm"])   # 97c: typical NO price
+            size = 10 if brain.contracts(n, 0.97) else 0   # flat 10 (Kelly sizing magnified losses); 0 = stopped
             if size == 0:
                 print(f"{n}: stopped by the brain ({brain.status(n)}); skipping")
                 continue
@@ -273,8 +312,9 @@ def main(argv=None):
             from .markets import MARKETS, ORIGINAL
             newer = [m for k, m in MARKETS.items() if k not in ORIGINAL]
             for n, cfg in FORWARD.items():
-                size = brain.contracts(n, 0.97)
-                todo = due_cities(newer, cfg.hour) if a.scheduled else newer
+                size = 10 if brain.contracts(n, 0.97) else 0
+                pool = [m for m in newer if not cfg.highs_only or m.key.startswith("high_")]
+                todo = due_cities(pool, cfg.hour) if a.scheduled else pool
                 if size and todo:
                     placed += run_longshot_paper(kalshi, ledger, todo, _replace(cfg, contracts=size))
                 elif not size:
