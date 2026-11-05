@@ -1,7 +1,8 @@
 name: live-trade
 
 # Real-money longshot orders (see kalshi_weather/live.py for the rules and safety limits).
-# Runs twice an hour; only acts in cities where it is 5pm local, and never buys a ticker twice.
+# Runs twice an hour (and on outside triggers); only acts in cities between 5pm and 9:59pm local,
+# and never buys a ticker twice. Every run, scheduled or manual, respects that window.
 # Repository variables:  LIVE_MODE = off | demo | live   (default off = dry run, no orders)
 #                        LIVE_START_EQUITY = account value the $25 loss limit counts from
 # Secrets: KALSHI_API_KEY_ID + KALSHI_PRIVATE_KEY (live), KALSHI_DEMO_KEY_ID + KALSHI_DEMO_PRIVATE_KEY (demo)
@@ -47,4 +48,4 @@ jobs:
         run: python -m kalshi_weather live --check
       - name: Trade (dry run unless LIVE_MODE is demo or live)
         if: github.event_name == 'schedule' || !inputs.check
-        run: python -m kalshi_weather live ${{ github.event_name == 'schedule' && '--scheduled' || '' }}
+        run: python -m kalshi_weather live --scheduled
