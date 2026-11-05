@@ -78,6 +78,16 @@ def test_signature_verifies_with_public_key():
     live.AuthClient("https://x/trade-api/v2", "k", pem.replace("\n", "\\n"))
 
 
+def test_ed25519_key_signs():
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    key = Ed25519PrivateKey.generate()
+    pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                            serialization.NoEncryption()).decode()
+    h = live.AuthClient("https://api.elections.kalshi.com/trade-api/v2", "kid", pem).headers("GET", "/portfolio/balance")
+    msg = (h["KALSHI-ACCESS-TIMESTAMP"] + "GET" + "/trade-api/v2/portfolio/balance").encode()
+    key.public_key().verify(base64.b64decode(h["KALSHI-ACCESS-SIGNATURE"]), msg)
+
+
 def test_dry_run_places_nothing():
     r = live.run("off", FakeMarket(books()), None, cities=nyc(), now=NOW, log=lambda *_: None)
     assert r["planned"] == 3 and r["placed"] == []      # 5 candidates, capped at 3 per city
