@@ -19,11 +19,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install requests
+      - run: pip install -r requirements.txt
       - name: Build and send summary
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          LIVE_MODE: ${{ vars.LIVE_MODE || 'off' }}
+          LIVE_START_EQUITY: ${{ vars.LIVE_START_EQUITY }}
+          KALSHI_API_KEY_ID: ${{ secrets.KALSHI_API_KEY_ID }}
+          KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}
+          KALSHI_DEMO_KEY_ID: ${{ secrets.KALSHI_DEMO_KEY_ID }}
+          KALSHI_DEMO_PRIVATE_KEY: ${{ secrets.KALSHI_DEMO_PRIVATE_KEY }}
           DASHBOARD_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
         run: |
           python - <<'PY'
@@ -77,6 +83,23 @@ jobs:
                   if db.execute("SELECT 1 FROM sqlite_master WHERE name='brain_state'").fetchone() else []
               for name, reason in stopped:
                   lines.append(f"STOPPED: {name} - {reason}")
+
+          try:
+              from kalshi_weather.live import from_env, status
+              mode, auth, start = from_env()
+              if auth is not None:
+                  s = status(mode, auth, start)
+                  pnl = f", P&L ${s['pnl']:+.2f} vs start ${start:.2f}" if s["pnl"] is not None else ""
+                  head = "LIVE (real money)" if mode == "live" else "DEMO (fake money)"
+                  lines += ["", f"{head}: equity ${s['equity']:.2f}{pnl}",
+                            f"  cash ${s['cash']:.2f}, open ${s['open_cost']:.2f} in {s['open_positions']} position(s), "
+                            f"{s['settled_24h']} settled in 24h"]
+                  if s["stopped"]:
+                      lines.append("  STOPPED: loss limit reached, no new orders")
+              else:
+                  lines += ["", "Live trading: off (dry run)"]
+          except Exception as e:
+              lines += ["", f"Live status unavailable: {type(e).__name__}"]
 
           lines += ["", os.environ["DASHBOARD_URL"]]
           r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
