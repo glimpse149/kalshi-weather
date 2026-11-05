@@ -63,7 +63,9 @@ jobs:
           python -m kalshi_weather --data ledger dashboard --out site/index.html --store store \
             --repo-url "https://github.com/${{ github.repository }}"
       - uses: actions/upload-pages-artifact@v3
+        continue-on-error: true      # a dashboard hiccup must not fail the trading run
         with:
           path: site
       - id: deploy
         uses: actions/deploy-pages@v4
+        continue-on-error: true      # GitHub Pages outages happen; the next run republishes
