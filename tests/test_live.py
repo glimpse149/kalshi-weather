@@ -146,6 +146,24 @@ def test_requires_start_equity_and_keys(monkeypatch):
     assert live.from_env()[1] is None
 
 
+def test_window_5pm_to_9pm_local():
+    from datetime import timedelta
+    six = [CITIES[k] for k in live.LIVE_CITIES]
+    keys = lambda t: sorted(c.key for c in live.in_window(six, t))
+    assert keys(NOW) == ["nyc", "phl"]                                  # 5:05pm ET, 4:05pm CT
+    assert keys(NOW + timedelta(hours=3)) == ["aus", "chi", "den", "lax", "nyc", "phl"]  # 8:05pm ET
+    assert keys(NOW + timedelta(hours=5)) == ["aus", "chi", "den", "lax"]  # 10:05pm ET: NY/PHL closed
+    assert keys(NOW - timedelta(hours=1)) == []                         # 4:05pm ET
+
+
+def test_city_day_cap_counts_earlier_runs():
+    held = [{"ticker": f"{EV}-B0.5", "position": -10, "market_exposure": 980},
+            {"ticker": f"{EV}-B1.5", "position": -10, "market_exposure": 980}]
+    a = FakeAuth(positions=held)
+    r = live.run("live", FakeMarket(books()), a, cities=nyc(), now=NOW, start_equity=150, log=lambda *_: None)
+    assert [t for t, _, _ in a.sent] == [f"{EV}-B2.5"]                  # 2 held + 1 new = cap of 3
+
+
 def test_order_error_is_skipped_not_fatal():
     a = FakeAuth(fail=(f"{EV}-B0.5",))
     r = live.run("live", FakeMarket(books()), a, cities=nyc(), now=NOW, start_equity=150, log=lambda *_: None)
