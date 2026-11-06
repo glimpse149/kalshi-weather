@@ -1,7 +1,7 @@
 """Real-money longshot trading on Kalshi, with hard safety limits.
 
 Rule (the longshot paper rule): between 5pm and 9:59pm local the day before, buy NO on
-every bracket whose best YES bid is 1-4c, at 1 - YES bid, 10 contracts, in six cities.
+every bracket whose best YES bid is 1-4c, at 1 - YES bid, 20 contracts, in six cities.
 Backtest by hour (c/contract): 5pm +1.09, 7pm +1.02, 9pm +0.83. The wide window is there
 because GitHub's scheduled runs can be hours late; each bracket is still bought only once.
 
@@ -11,11 +11,13 @@ Modes, set by the LIVE_MODE environment variable:
   live           real money, keys KALSHI_API_KEY_ID / KALSHI_PRIVATE_KEY
 
 Safety limits (all enforced here, not by settings):
-  - 10 contracts per order max, NO price 96-99c only, limit orders that expire in 5 minutes
+  - 20 contracts per order max, NO price 96-99c only, limit orders that expire in 5 minutes
+  - in each city the safest brackets (highest NO price) are taken first
   - at most 3 brackets per city per day (counting earlier runs), never a ticker already held
-  - total money in open positions capped at $130
-  - stop: no new orders once equity (cash + open positions at cost) falls $25 below
-    LIVE_START_EQUITY. Raise LIVE_START_EQUITY by hand to re-arm after reviewing.
+  - total money in open positions capped at $270
+  - stop: no new orders once equity (cash + open positions at cost) falls $50 below
+    LIVE_START_EQUITY. Update LIVE_START_EQUITY after any deposit or withdrawal, and raise
+    it by hand to re-arm after reviewing a stop.
 GitHub Actions logs on a public repo are public, so balances go to Telegram only.
 """
 from __future__ import annotations
@@ -36,11 +38,11 @@ from .config import CITIES, KALSHI_DEMO, KALSHI_PROD
 LIVE_CITIES = ("nyc", "chi", "den", "lax", "aus", "phl")   # Miami stays on paper
 LIVE_HOUR = 17                 # window start, local time
 LIVE_LAST_HOUR = 21            # window end: trades up to 9:59pm local
-CONTRACTS = 10
+CONTRACTS = 20                 # raised from 10 on 2026-11-06 after a $150 deposit
 MAX_ORDERS_PER_CITY_DAY = 3
-MAX_OPEN_COST = 130.0          # dollars tied up in open positions
+MAX_OPEN_COST = 270.0          # dollars tied up in open positions (~$300 account)
 MIN_NO_CENTS, MAX_NO_CENTS = 96, 99
-STOP_LOSS = 25.0               # dollars below LIVE_START_EQUITY
+STOP_LOSS = 50.0               # dollars below LIVE_START_EQUITY (~2.5 misses at 20 contracts)
 ORDER_TTL = 300                # seconds a limit order may rest before it expires
 
 
@@ -205,7 +207,7 @@ def plan_orders(market, cities, now=None, log=print) -> list[dict]:
     for city in cities:
         target = now.astimezone(ZoneInfo(city.tz)).date() + timedelta(days=1)
         brackets = [b for b in market.markets(city.series, status="open") if event_date(b.event_ticker) == target]
-        n = 0
+        found = []
         for b in brackets:
             q = market.orderbook(b.ticker)
             sig = longshot_signal(b.ticker, b.event_ticker, q["yes_bid"], cfg, q["yes_bid_qty"],
@@ -213,12 +215,14 @@ def plan_orders(market, cities, now=None, log=print) -> list[dict]:
             if sig is None:
                 continue
             cents = int(round(sig.price * 100))
-            if not MIN_NO_CENTS <= cents <= MAX_NO_CENTS or n >= MAX_ORDERS_PER_CITY_DAY:
+            if not MIN_NO_CENTS <= cents <= MAX_NO_CENTS:
                 continue
-            plan.append({"city": city.key, "ticker": b.ticker, "no_cents": cents,
-                         "count": min(sig.contracts, CONTRACTS), "fee": sig.fee})
-            n += 1
-        log(f"[{city.key}] {target}: {n} longshot bracket(s)")
+            found.append({"city": city.key, "ticker": b.ticker, "no_cents": cents,
+                          "count": min(sig.contracts, CONTRACTS), "fee": sig.fee})
+        found.sort(key=lambda p: -p["no_cents"])            # safest (cheapest YES) first
+        plan += found[:MAX_ORDERS_PER_CITY_DAY]
+        log(f"[{city.key}] {target}: {min(len(found), MAX_ORDERS_PER_CITY_DAY)} longshot bracket(s)")
+    plan.sort(key=lambda p: -p["no_cents"])                 # if the cash cap binds, safest go first
     return plan
 
 
