@@ -37,3 +37,16 @@ def test_message_order_live_on_top_paper_below(tmp_path):
 def test_live_off_and_errors():
     assert summary.live_lines(None, None) == ["LIVE (real money)", "Off (dry run, no orders)"]
     assert summary.live_lines(None, None, "LiveError")[1] == "Unavailable: LiveError"
+
+
+def test_manual_bets_are_not_counted_as_bot_trades():
+    fills = [
+        {"ticker": "KXHIGHNY-26NOV05-B74.5", "book_side": "ask", "count_fp": "10", "no_price_dollars": "0.98",
+         "fee_cost": "0.02", "created_time": "2026-11-05T01:00:00Z"},
+        {"ticker": "KXNFLGAME-26OCT05-BAL", "side": "no", "count": 20, "no_price": 13,
+         "created_time": "2026-10-05T17:00:00Z"},                              # manual bet, lost
+    ]
+    st = [{"ticker": "KXHIGHNY-26NOV05-B74.5", "market_result": "no", "revenue": 1000, "settled_time": "2026-11-06T12:00:00Z"},
+          {"ticker": "KXNFLGAME-26OCT05-BAL", "market_result": "yes", "revenue": 0, "settled_time": "2026-10-06T03:00:00Z"}]
+    r = live.trade_results(fills, st, now=NOW, only=live.bot_series())
+    assert r["all"] == {"settled": 1, "losses": 0, "pnl": 0.18}
