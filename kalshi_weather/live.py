@@ -14,7 +14,8 @@ Safety limits (all enforced here, not by settings):
   - 20 contracts per order max, NO price 96-99c only, limit orders that expire in 5 minutes
   - in each city the safest brackets (highest NO price) are taken first
   - at most 3 brackets per city per day (counting earlier runs), never a ticker already held
-  - total money in open positions capped at $270
+  - total money in open positions capped at $520 (two overlapping days: each batch is held
+    ~38h, from 5pm the day before until the morning after the event)
   - stop: no new orders once equity (cash + open positions at cost) falls $50 below
     LIVE_START_EQUITY. Update LIVE_START_EQUITY after any deposit or withdrawal, and raise
     it by hand to re-arm after reviewing a stop.
@@ -40,7 +41,7 @@ LIVE_HOUR = 17                 # window start, local time
 LIVE_LAST_HOUR = 21            # window end: trades up to 9:59pm local
 CONTRACTS = 20                 # raised from 10 on 2026-11-06 after a $150 deposit
 MAX_ORDERS_PER_CITY_DAY = 3
-MAX_OPEN_COST = 270.0          # dollars tied up in open positions (~$300 account)
+MAX_OPEN_COST = 520.0          # dollars tied up in open positions (~$555 account, 2 days x ~$256)
 MIN_NO_CENTS, MAX_NO_CENTS = 96, 99
 STOP_LOSS = 50.0               # dollars below LIVE_START_EQUITY (~2.5 misses at 20 contracts)
 ORDER_TTL = 300                # seconds a limit order may rest before it expires
