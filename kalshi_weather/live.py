@@ -306,10 +306,16 @@ def _when(d: dict, *names) -> datetime | None:
     return None
 
 
-def trade_results(fills: list[dict], settlements: list[dict], now=None) -> dict:
+def bot_series() -> tuple[str, ...]:
+    """Ticker prefixes of the markets this bot trades, e.g. 'KXHIGHNY-'."""
+    return tuple(CITIES[k].series + "-" for k in LIVE_CITIES)
+
+
+def trade_results(fills: list[dict], settlements: list[dict], now=None, only=None) -> dict:
     """Per-trade live results from Kalshi fills (cost) and settlements (payout).
 
     One trade = one settled market we bought NO in. P&L = payout - price paid - taker fee.
+    `only`: ticker prefixes to count; anything else in the account (manual bets) is ignored.
     """
     from .strategy import taker_fee
     now = now or datetime.now(timezone.utc)
@@ -317,6 +323,8 @@ def trade_results(fills: list[dict], settlements: list[dict], now=None) -> dict:
     cost, bought = {}, {}
     new_24h = set()
     for f in fills:
+        if only and not (f.get("ticker") or f.get("market_ticker") or "").startswith(only):
+            continue                     # not a market this bot trades (e.g. a manual bet)
         # The bot only buys NO: on the V2 book that is a YES "ask"; older fills say side "no".
         if not (f.get("book_side") == "ask" or (f.get("outcome_side") or f.get("side") or "").lower() == "no"):
             continue
@@ -349,7 +357,7 @@ def status(mode: str, auth: AuthClient, start_equity: float | None) -> dict:
     positions = auth.positions()
     cash, tied = auth.balance(), open_cost(positions)
     try:
-        results = trade_results(auth.fills(), auth.settlements())
+        results = trade_results(auth.fills(), auth.settlements(), only=bot_series())
     except LiveError:
         results = None
     eq = cash + tied
