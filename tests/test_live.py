@@ -93,10 +93,10 @@ def test_dry_run_places_nothing():
     assert r["planned"] == 3 and r["placed"] == []      # 5 candidates, capped at 3 per city
 
 
-def test_places_capped_orders_at_10_and_right_price():
-    a = FakeAuth()
-    r = live.run("demo", FakeMarket(books()), a, cities=nyc(), now=NOW, start_equity=150, log=lambda *_: None)
-    assert len(a.sent) == 3 and all(c == 98 and n == 10 for _, c, n in a.sent)
+def test_places_capped_orders_at_20_and_right_price():
+    a = FakeAuth(cash=300.0)
+    r = live.run("demo", FakeMarket(books()), a, cities=nyc(), now=NOW, start_equity=300, log=lambda *_: None)
+    assert len(a.sent) == 3 and all(c == 98 and n == 20 for _, c, n in a.sent)
     assert len(r["placed"]) == 3
 
 
@@ -119,18 +119,18 @@ def test_never_doubles_a_held_ticker():
 
 
 def test_open_cost_cap():
-    held = [{"ticker": "OTHER", "position": -128, "market_exposure_dollars": "125.00"}]
+    held = [{"ticker": "OTHER", "position": -265, "market_exposure_dollars": "262.00"}]
     a = FakeAuth(cash=40, positions=held)
     r = live.run("live", FakeMarket(books()), a, cities=nyc(), now=NOW, start_equity=150, log=lambda *_: None)
     assert a.sent == [] and all(why == "open-cost cap" for _, why in r["skipped"])
 
 
 def test_loss_limit_stops_all_orders():
-    a = FakeAuth(cash=124.0)       # equity 124 < 150 - 25
-    r = live.run("live", FakeMarket(books()), a, cities=nyc(), now=NOW, start_equity=150, log=lambda *_: None)
+    a = FakeAuth(cash=249.0)       # equity 249 < 300 - 50
+    r = live.run("live", FakeMarket(books()), a, cities=nyc(), now=NOW, start_equity=300, log=lambda *_: None)
     assert a.sent == [] and r["stopped"]
-    a = FakeAuth(cash=126.0)
-    assert live.run("live", FakeMarket(books()), a, cities=nyc(), now=NOW, start_equity=150,
+    a = FakeAuth(cash=251.0)
+    assert live.run("live", FakeMarket(books()), a, cities=nyc(), now=NOW, start_equity=300,
                     log=lambda *_: None)["stopped"] is None
 
 
@@ -201,6 +201,13 @@ def test_v2_fills_count_as_no_purchases():
     st = [{"ticker": "A", "market_result": "no", "revenue": 1000, "settled_time": "2026-11-05T12:00:00Z"}]
     r = live.trade_results(fills, st, now=NOW.replace(day=5, hour=13))
     assert r["all"] == {"settled": 1, "losses": 0, "pnl": 0.18}
+
+
+def test_safest_brackets_first_per_city():
+    b = {f"{EV}-B0.5": (0.04, 50, 0.05), f"{EV}-B1.5": (0.01, 50, 0.02),
+         f"{EV}-B2.5": (0.03, 50, 0.04), f"{EV}-B3.5": (0.02, 50, 0.03)}
+    plan = live.plan_orders(FakeMarket(b), nyc(), now=NOW, log=lambda *_: None)
+    assert [p["no_cents"] for p in plan] == [99, 98, 97]      # the 4c (96c NO) bracket is dropped
 
 
 def test_order_error_is_skipped_not_fatal():
