@@ -1,7 +1,7 @@
 """Real-money longshot trading on Kalshi, with hard safety limits.
 
 Rule (the longshot paper rule): between 5pm and 9:59pm local the day before, buy NO on
-every bracket whose best YES bid is 1-4c, at 1 - YES bid, 20 contracts, in six cities.
+every bracket whose best YES bid is 1-2c, at 1 - YES bid, 30 contracts, in six cities.
 Backtest by hour (c/contract): 5pm +1.09, 7pm +1.02, 9pm +0.83. The wide window is there
 because GitHub's scheduled runs can be hours late; each bracket is still bought only once.
 
@@ -11,7 +11,7 @@ Modes, set by the LIVE_MODE environment variable:
   live           real money, keys KALSHI_API_KEY_ID / KALSHI_PRIVATE_KEY
 
 Safety limits (all enforced here, not by settings):
-  - 20 contracts per order max, NO price 96-99c only, limit orders that expire in 5 minutes
+  - 30 contracts per order max, NO price 98-99c only, limit orders that expire in 5 minutes
   - in each city the safest brackets (highest NO price) are taken first
   - at most 3 brackets per city per day (counting earlier runs), never a ticker already held
   - total money in open positions capped at $520 (two overlapping days: each batch is held
@@ -39,11 +39,11 @@ from .config import CITIES, KALSHI_DEMO, KALSHI_PROD
 LIVE_CITIES = ("nyc", "chi", "den", "lax", "aus", "phl")   # Miami stays on paper
 LIVE_HOUR = 17                 # window start, local time
 LIVE_LAST_HOUR = 21            # window end: trades up to 9:59pm local
-CONTRACTS = 20                 # raised from 10 on 2026-11-06 after a $150 deposit
+CONTRACTS = 30                 # 2026-11-06: 30 contracts on the safest brackets only (was 20 at 96-99c)
 MAX_ORDERS_PER_CITY_DAY = 3
 MAX_OPEN_COST = 520.0          # dollars tied up in open positions (~$555 account, 2 days x ~$256)
-MIN_NO_CENTS, MAX_NO_CENTS = 96, 99
-STOP_LOSS = 50.0               # dollars below LIVE_START_EQUITY (~2.5 misses at 20 contracts)
+MIN_NO_CENTS, MAX_NO_CENTS = 98, 99   # YES bid 1-2c only: 0 losses in 533 upstream trades
+STOP_LOSS = 50.0               # dollars below LIVE_START_EQUITY (~1.7 misses at 30 contracts)
 ORDER_TTL = 300                # seconds a limit order may rest before it expires
 
 
