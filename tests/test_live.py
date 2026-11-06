@@ -93,10 +93,10 @@ def test_dry_run_places_nothing():
     assert r["planned"] == 3 and r["placed"] == []      # 5 candidates, capped at 3 per city
 
 
-def test_places_capped_orders_at_20_and_right_price():
+def test_places_capped_orders_at_30_and_right_price():
     a = FakeAuth(cash=300.0)
     r = live.run("demo", FakeMarket(books()), a, cities=nyc(), now=NOW, start_equity=300, log=lambda *_: None)
-    assert len(a.sent) == 3 and all(c == 98 and n == 20 for _, c, n in a.sent)
+    assert len(a.sent) == 3 and all(c == 98 and n == 30 for _, c, n in a.sent)
     assert len(r["placed"]) == 3
 
 
@@ -207,7 +207,7 @@ def test_safest_brackets_first_per_city():
     b = {f"{EV}-B0.5": (0.04, 50, 0.05), f"{EV}-B1.5": (0.01, 50, 0.02),
          f"{EV}-B2.5": (0.03, 50, 0.04), f"{EV}-B3.5": (0.02, 50, 0.03)}
     plan = live.plan_orders(FakeMarket(b), nyc(), now=NOW, log=lambda *_: None)
-    assert [p["no_cents"] for p in plan] == [99, 98, 97]      # the 4c (96c NO) bracket is dropped
+    assert [p["no_cents"] for p in plan] == [99, 98]          # 3c and 4c YES (97c/96c NO) are dropped
 
 
 def test_order_error_is_skipped_not_fatal():
