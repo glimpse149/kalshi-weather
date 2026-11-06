@@ -119,7 +119,7 @@ def test_never_doubles_a_held_ticker():
 
 
 def test_open_cost_cap():
-    held = [{"ticker": "OTHER", "position": -265, "market_exposure_dollars": "262.00"}]
+    held = [{"ticker": "OTHER", "position": -520, "market_exposure_dollars": "515.00"}]
     a = FakeAuth(cash=40, positions=held)
     r = live.run("live", FakeMarket(books()), a, cities=nyc(), now=NOW, start_equity=150, log=lambda *_: None)
     assert a.sent == [] and all(why == "open-cost cap" for _, why in r["skipped"])
