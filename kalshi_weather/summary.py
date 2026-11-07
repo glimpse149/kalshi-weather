@@ -10,7 +10,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 
 LIVE_TRIAL_TRADES = 100      # first review point for the real-money trial
-PAPER_TARGET = 1500          # trades needed to tell a ~0.5c edge from zero
+PAPER_TARGET = 600           # v2 base: about a month of trades (~20 brackets a day)
 
 
 def live_lines(s: dict | None, start: float | None, error: str | None = None) -> list[str]:
@@ -56,10 +56,10 @@ def paper_lines(db_path: str, now=None) -> list[str]:
     n, l, p = q("SELECT COUNT(*), COALESCE(SUM(result != side), 0), COALESCE(SUM(pnl), 0) "
                 "FROM trades WHERE status='settled'")
     open_n = q("SELECT COUNT(*) FROM trades WHERE status='open'")[0]
-    main = q("SELECT COUNT(*) FROM trades WHERE status='settled' AND strategy LIKE 'longshot\\_%' ESCAPE '\\'")[0]
+    main = q("SELECT COUNT(*) FROM trades WHERE status='settled' AND strategy='v2_taker'")[0]
     out.append(f"Last 24h: {opened} new trades, {n24} settled, {l24} losses, P&L ${p24:+.2f}")
     out.append(f"All time: {n:,} settled ({open_n} open), {l} losses, P&L ${p:+.2f}")
-    out.append(f"Progress: main strategy {main:,} of {PAPER_TARGET:,} trades ({main / PAPER_TARGET:.0%})")
+    out.append(f"Progress: v2 base {main:,} of {PAPER_TARGET:,} trades ({main / PAPER_TARGET:.0%})")
     out += v2_lines(db)
     return out
 
