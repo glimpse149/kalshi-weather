@@ -108,7 +108,7 @@ def main(argv=None):
     pp.add_argument("--cities", default="all")
     pp.add_argument("--min-edge", type=float, default=StrategyConfig.min_edge)
     pp.add_argument("--prob", choices=["model", "blend"], default="model")
-    pp.add_argument("--strategy", choices=["model", "longshot", "maker", "poly", "lip"], default="model")
+    pp.add_argument("--strategy", choices=["model", "longshot", "maker", "poly", "lip", "v2"], default="model")
     pp.add_argument("--contracts", type=int, default=10)
     pp.add_argument("--variant", default="all", help="longshot variant name, or 'all'")
     pp.add_argument("--scheduled", action="store_true",
@@ -262,6 +262,17 @@ def main(argv=None):
             print(f"{len(run_maker_paper(kalshi, ledger, todo, size))} resting order(s) posted")
         elif not size:
             print(f"{MAKER_STRATEGY}: stopped by the brain")
+        return
+
+    if a.cmd == "paper" and a.strategy == "v2":
+        from .brain import Brain
+        from .v2 import STRATEGIES, run_v2
+        brain = Brain(ledger)
+        sizes = {n: (10 if brain.contracts(n, 0.97) else 0) for n in STRATEGIES}
+        for n, size in sizes.items():
+            if not size:
+                print(f"{n}: stopped by the brain")
+        print("v2 paper:", run_v2(kalshi, ledger, WeatherClient(), sizes))
         return
 
     if a.cmd == "paper" and a.strategy == "lip":
