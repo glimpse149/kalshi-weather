@@ -266,11 +266,13 @@ def main(argv=None):
 
     if a.cmd == "paper" and a.strategy == "v2":
         from .brain import Brain
-        from .v2 import STRATEGIES, run_v2
+        from .mm import check_fills
+        from .v2 import ACTIVE, STRATEGIES, run_v2
+        print("fills:", check_fills(kalshi, ledger))      # resolve any maker orders still resting
         brain = Brain(ledger)
-        sizes = {n: (10 if brain.contracts(n, 0.97) else 0) for n in STRATEGIES}
-        for n, size in sizes.items():
-            if not size:
+        sizes = {n: (10 if n in ACTIVE and brain.contracts(n, 0.97) else 0) for n in STRATEGIES}
+        for n in ACTIVE:
+            if not sizes[n]:
                 print(f"{n}: stopped by the brain")
         print("v2 paper:", run_v2(kalshi, ledger, WeatherClient(), sizes))
         return
