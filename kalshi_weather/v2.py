@@ -35,6 +35,9 @@ from .strategy import Signal, taker_fee
 
 TAKER, MAKER, EARLY, GUARD = "v2_taker", "v2_maker", "v2_early", "v2_guard"
 STRATEGIES = (TAKER, MAKER, EARLY, GUARD)
+# 2026-11-06: the paper bot runs only the base rule. The variants stay in the code
+# (and their past trades in the ledger); add one back here to restart it.
+ACTIVE = (TAKER,)
 
 V2_MARKETS = tuple(k for k, m in MARKETS.items() if m.kind == "high" and k != "high_mia")
 FIRST_HOUR, LAST_HOUR = 15, 21          # 3pm to 9:59pm local, the day before
