@@ -50,6 +50,7 @@ class Bracket:
     yes_bid: float | None
     yes_ask: float | None
     title: str = ""
+    open_time: str | None = None
 
     @property
     def no_ask(self) -> float | None:
@@ -73,6 +74,7 @@ def parse_market(m: dict) -> Bracket:
         yes_bid=_price(m, "yes_bid"),
         yes_ask=_price(m, "yes_ask"),
         title=m.get("yes_sub_title") or m.get("subtitle") or m.get("title") or "",
+        open_time=m.get("open_time"),
     )
 
 
