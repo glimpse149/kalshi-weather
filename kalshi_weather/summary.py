@@ -60,7 +60,26 @@ def paper_lines(db_path: str, now=None) -> list[str]:
     out.append(f"Last 24h: {opened} new trades, {n24} settled, {l24} losses, P&L ${p24:+.2f}")
     out.append(f"All time: {n:,} settled ({open_n} open), {l} losses, P&L ${p:+.2f}")
     out.append(f"Progress: main strategy {main:,} of {PAPER_TARGET:,} trades ({main / PAPER_TARGET:.0%})")
+    out += v2_lines(db)
     return out
+
+
+V2_LABELS = {"v2_taker": "base", "v2_maker": "maker", "v2_early": "early", "v2_guard": "fcst guard"}
+
+
+def v2_lines(db) -> list[str]:
+    """One line per v2 test: settled trades, losses, P&L per contract, open/resting."""
+    rows = []
+    for name, label in V2_LABELS.items():
+        n, l, p, c = db.execute("SELECT COUNT(*), COALESCE(SUM(result != side), 0), COALESCE(SUM(pnl), 0), "
+                                "COALESCE(SUM(contracts), 0) FROM trades WHERE status='settled' AND strategy=?",
+                                (name,)).fetchone()
+        w = db.execute("SELECT COUNT(*) FROM trades WHERE status IN ('open','resting') AND strategy=?",
+                       (name,)).fetchone()[0]
+        if n or w:
+            cents = f", {100 * p / c:+.2f}c/contract" if c else ""
+            rows.append(f"  {label}: {n} settled, {l} losses, ${p:+.2f}{cents} ({w} open)")
+    return ["V2 tests:"] + rows if rows else []
 
 
 def build(db_path: str = "ledger/paper.db", dashboard: str = "", now=None) -> str:
