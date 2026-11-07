@@ -1,8 +1,8 @@
 name: paper-trade
 
-# Runs every hour. Each longshot variant (see VARIANTS in kalshi_weather/longshot.py)
-# only trades the cities where it is currently that variant's local hour, matching
-# the backtest. The ledger (ledger/paper.db) is committed back to the repo.
+# Runs every hour. Since 2026-11-06 the paper bot trades one strategy: the v2 base rule
+# (kalshi_weather/v2.py). Older strategies are stopped; their trades stay in the ledger and
+# still settle here. The ledger (ledger/paper.db) is committed back to the repo.
 on:
   schedule:
     - cron: "5 * * * *"
@@ -32,18 +32,12 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - name: Settle finished trades, then paper-trade longshots
+      - name: Settle finished trades, then paper-trade the v2 base rule
         run: |
           python -m kalshi_weather --data ledger settle
-          python -m kalshi_weather --data ledger paper --strategy longshot --scheduled
-          python -m kalshi_weather --data ledger paper --strategy maker --scheduled
-          python -m kalshi_weather --data ledger paper --strategy poly || echo "Polymarket paper step failed"
           python -m kalshi_weather --data ledger paper --strategy v2 || echo "v2 paper step failed"
           python -m kalshi_weather --data ledger report
           python -m kalshi_weather --data ledger brain --alerts alerts.txt
-          if [ "$(date -u +%H)" = "23" ]; then
-            python -m kalshi_weather --data ledger etf || echo "ETF update failed (price source down?)"
-          fi
       - name: Open an issue if the brain stopped a strategy
         if: hashFiles('alerts.txt') != ''
         env:
