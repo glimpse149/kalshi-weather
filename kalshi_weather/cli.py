@@ -141,6 +141,7 @@ def main(argv=None):
     ex = sub.add_parser("exits", help="backtest selling early / buying again on hourly prices (no orders)")
     ex.add_argument("--days", type=int, default=120)
     ex.add_argument("--out", default="lab")
+    ex.add_argument("--six", action="store_true", help="only the 6 live cities")
     db = sub.add_parser("dashboard", help="write an HTML dashboard of the paper ledger")
     db.add_argument("--out", default="site/index.html")
     db.add_argument("--repo-url", default="")
@@ -269,7 +270,8 @@ def main(argv=None):
 
     if a.cmd == "exits":
         from .exits import main as exits_main
-        print(exits_main(a.days, a.out, cache_dir=f"{a.data}/cache"))
+        from .exits import LIVE_SIX
+        print(exits_main(a.days, a.out, cache_dir=f"{a.data}/cache", keys=LIVE_SIX if a.six else None))
         return
 
     if a.cmd == "paper" and a.strategy == "v2":
