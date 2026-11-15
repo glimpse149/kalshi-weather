@@ -138,6 +138,9 @@ def main(argv=None):
     lv = sub.add_parser("live", help="real-money longshot orders (LIVE_MODE=off|demo|live)")
     lv.add_argument("--scheduled", action="store_true", help="only cities inside the 5-9pm local window")
     lv.add_argument("--check", action="store_true", help="test the API keys and print account status")
+    ex = sub.add_parser("exits", help="backtest selling early / buying again on hourly prices (no orders)")
+    ex.add_argument("--days", type=int, default=120)
+    ex.add_argument("--out", default="lab")
     db = sub.add_parser("dashboard", help="write an HTML dashboard of the paper ledger")
     db.add_argument("--out", default="site/index.html")
     db.add_argument("--repo-url", default="")
@@ -262,6 +265,11 @@ def main(argv=None):
             print(f"{len(run_maker_paper(kalshi, ledger, todo, size))} resting order(s) posted")
         elif not size:
             print(f"{MAKER_STRATEGY}: stopped by the brain")
+        return
+
+    if a.cmd == "exits":
+        from .exits import main as exits_main
+        print(exits_main(a.days, a.out, cache_dir=f"{a.data}/cache"))
         return
 
     if a.cmd == "paper" and a.strategy == "v2":
