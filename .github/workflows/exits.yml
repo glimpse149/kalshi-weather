@@ -1,0 +1,37 @@
+name: exit-backtest
+
+# One-off research: test selling early / buying again on hourly Kalshi prices.
+# Read-only (public market data, no keys, no orders). Run it from the Actions tab.
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "How many days of settled markets to test"
+        default: "120"
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - uses: actions/cache@v4
+        with:
+          path: exitdata/cache
+          key: exits-cache-${{ github.run_id }}
+          restore-keys: exits-cache-
+      - name: Run the exit backtest
+        run: python -m kalshi_weather --data exitdata exits --days "${{ inputs.days }}" --out results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: exit-backtest
+          path: results/
