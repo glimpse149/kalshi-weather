@@ -37,6 +37,8 @@ ADDS = ((0.85, 0.93, None), (0.85, 0.93, 12), (0.85, 0.93, 6), (0.85, 0.93, 3),
         (0.88, 0.95, 6), (0.80, 0.90, 6))
 COMBOS = ((0.80, (0.85, 0.93, 6)), (0.75, (0.85, 0.93, 6)), (0.70, (0.88, 0.95, 6)))
 LATE_STOPS = tuple((s, h) for s in (0.80, 0.70, 0.60) for h in (3, 6, 9, 12))
+# late-day stop + buy again (doubling to 60 contracts): (stop, stop hours, add rule)
+LATE_COMBOS = tuple((s, 6, a) for s in (0.70, 0.80) for a in ADDS)
 
 
 def groups() -> dict[str, tuple[str, ...]]:
@@ -151,6 +153,7 @@ def rule_rows(trades: list[dict]) -> list[str]:
             note.append(f"sold {len(st)}, {sum(x['won'] for x in st)} of them would have won")
         if add:
             note.append(f"added {len(ad)}, {sum(x['won'] for x in ad)} won")
+        note.append(f"worst trade ${min(x['pnl'] for x in r):+,.2f}")
         return f"| {name} | ${pnl:+,.2f} | {'; '.join(note) or '—'} |"
 
     rows = ["| Rule | Total P&L (30 contracts) | What it did |", "|---|---|---|", run("Hold to settlement")]
@@ -162,6 +165,10 @@ def rule_rows(trades: list[dict]) -> list[str]:
     for s, (lo, hi, last) in COMBOS:
         rows.append(run(f"Sell < {s * 100:.0f}c + buy again {lo * 100:.0f}-{hi * 100:.0f}c last {last}h",
                         stop=s, add=(lo, hi, last)))
+    for s, h, (lo, hi, last) in LATE_COMBOS:
+        when = "any time" if last is None else f"last {last}h"
+        rows.append(run(f"Sell < {s * 100:.0f}c last {h}h only + buy again {lo * 100:.0f}-{hi * 100:.0f}c {when}",
+                        stop=s, add=(lo, hi, last), last=h))
     return rows
 
 
