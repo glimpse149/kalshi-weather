@@ -8,6 +8,10 @@ on:
       days:
         description: "How many days of settled markets to test"
         default: "120"
+      six:
+        description: "Only the 6 live cities (faster)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -29,7 +33,7 @@ jobs:
           key: exits-cache-${{ github.run_id }}
           restore-keys: exits-cache-
       - name: Run the exit backtest
-        run: python -m kalshi_weather --data exitdata exits --days "${{ inputs.days }}" --out results
+        run: python -m kalshi_weather --data exitdata exits --days "${{ inputs.days }}" --out results ${{ inputs.six && '--six' || '' }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
