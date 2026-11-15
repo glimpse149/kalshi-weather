@@ -103,3 +103,13 @@ def test_report_six_only_skips_whole_market():
     text = exits.report([trade([0.98, 0.99])], 120, keys=exits.LIVE_SIX)
     assert "## Your 6 live cities" in text and "Whole market" not in text
     assert "last 6h only" in text
+
+
+def test_late_stop_plus_add_sells_all_60():
+    # dip to 0.90 early (add 30 more), then a late crash below 70 sells all 60
+    t = trade([0.97, 0.89, 0.95, 0.97, 0.60, 0.05], result="yes")
+    r = exits.simulate(t, stop=0.70, add=(0.85, 0.93, None), stop_last=2)
+    assert r["added"] == 0.90 and r["stopped"] == 0.60
+    exp = (-0.98 * 30 - taker_fee(0.98, 30)) + (-0.90 * 30 - taker_fee(0.90, 30)) + 0.60 * 60 - taker_fee(0.60, 60)
+    assert r["pnl"] == round(exp, 2)
+    assert "last 6h only + buy again" in exits.report([t], 120, keys=exits.LIVE_SIX)
