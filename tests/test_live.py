@@ -133,10 +133,10 @@ def test_open_cost_cap():
 
 
 def test_loss_limit_stops_all_orders():
-    a = FakeAuth(cash=249.0)       # equity 249 < 300 - 50
+    a = FakeAuth(cash=238.0)       # equity 238 < 300 - 61
     r = live.run("live", FakeMarket(books()), a, cities=nyc(), now=NOW, start_equity=300, log=lambda *_: None)
     assert a.sent == [] and r["stopped"]
-    a = FakeAuth(cash=251.0)
+    a = FakeAuth(cash=240.0)
     assert live.run("live", FakeMarket(books()), a, cities=nyc(), now=NOW, start_equity=300,
                     log=lambda *_: None)["stopped"] is None
 
