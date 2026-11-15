@@ -47,6 +47,13 @@ class FakeAuth:
         self.sent.append((ticker, cents, count))
         return {"status": "executed", "order_id": "x"}
 
+    def sell_no(self, ticker, cents, count):
+        self.sold = getattr(self, "sold", []) + [(ticker, cents, count)]
+        return {"status": "executed", "order_id": "s"}
+
+    def fills(self):
+        return getattr(self, "fill_list", [])
+
 
 @pytest.fixture(autouse=True)
 def no_telegram(monkeypatch):
@@ -119,9 +126,9 @@ def test_never_doubles_a_held_ticker():
 
 
 def test_open_cost_cap():
-    held = [{"ticker": "OTHER", "position": -520, "market_exposure_dollars": "515.00"}]
+    held = [{"ticker": "OTHER", "position": -1600, "market_exposure_dollars": "1595.00"}]
     a = FakeAuth(cash=40, positions=held)
-    r = live.run("live", FakeMarket(books()), a, cities=nyc(), now=NOW, start_equity=150, log=lambda *_: None)
+    r = live.run("live", FakeMarket(books()), a, cities=nyc(), now=NOW, start_equity=1600, log=lambda *_: None)
     assert a.sent == [] and all(why == "open-cost cap" for _, why in r["skipped"])
 
 
@@ -214,3 +221,106 @@ def test_order_error_is_skipped_not_fatal():
     a = FakeAuth(fail=(f"{EV}-B0.5",))
     r = live.run("live", FakeMarket(books()), a, cities=nyc(), now=NOW, start_equity=150, log=lambda *_: None)
     assert len(a.sent) == 2 and (f"{EV}-B0.5", "order error") in r["skipped"]
+
+
+# ---------- managing open positions: late sell and buy again ----------
+
+EVENT_7PM = datetime(2026, 11, 6, 0, 0, tzinfo=timezone.utc)    # 7pm in New York on the event day
+EVENT_3PM = datetime(2026, 11, 5, 20, 0, tzinfo=timezone.utc)   # 3pm on the event day
+T = f"{EV}-B0.5"
+
+
+def held(n=30):
+    return [{"ticker": T, "position": -n, "market_exposure": n * 99}]
+
+
+def manage(book, now, auth=None, start=1500):
+    a = auth or FakeAuth(cash=1500, positions=held())
+    r = live.manage("live", FakeMarket({T: book}), a, now=now, start_equity=start, log=lambda *_: None)
+    return a, r
+
+
+def test_late_sell_after_6pm_when_no_bid_below_70():
+    a, r = manage((0.30, 40, 0.35), EVENT_7PM)          # NO bid 65c, YES bid 30c
+    assert a.sold == [(T, 65, 30)] and r["sold"][0]["no_cents"] == 65 and not a.sent
+
+
+def test_no_late_sell_before_6pm_or_on_entry_evening():
+    a, r = manage((0.30, 40, 0.35), EVENT_3PM)
+    assert not getattr(a, "sold", []) and not r["sold"]
+    a, r = manage((0.30, 40, 0.35), NOW)                   # evening before the event day
+    assert not getattr(a, "sold", [])
+
+
+def test_no_late_sell_on_an_empty_book():
+    a, r = manage((0.02, 5, 0.40), EVENT_7PM)            # NO bid 60c but YES bid only 2c
+    assert not getattr(a, "sold", [])
+
+
+def test_buy_again_once_in_85_93_band():
+    a, r = manage((0.10, 50, 0.12), EVENT_3PM)           # NO ask 90c
+    assert a.sent == [(T, 90, 30)] and r["added"][0]["count"] == 30
+    a2 = FakeAuth(cash=1500, positions=held(60))
+    a2.fill_list = [{"ticker": T, "book_side": "ask", "no_price_dollars": "0.9000", "count_fp": "30"}]
+    a2, r = manage((0.10, 50, 0.12), EVENT_3PM, auth=a2)
+    assert not a2.sent                                    # already bought again
+
+
+def test_buy_again_outside_band_or_thin_book():
+    a, _ = manage((0.03, 50, 0.05), EVENT_3PM)           # NO ask 97c: no dip
+    assert not a.sent
+    a, _ = manage((0.20, 50, 0.22), EVENT_3PM)           # NO ask 80c: below the band
+    assert not a.sent
+    a, _ = manage((0.10, 12, 0.12), EVENT_3PM)           # only 12 offered
+    assert a.sent == [(T, 90, 12)]
+
+
+def test_buy_again_respects_stop_cap_and_cash():
+    a, _ = manage((0.10, 50, 0.12), EVENT_3PM, start=2000)          # equity far below start: stopped
+    assert not a.sent
+    big = FakeAuth(cash=1500, positions=held() + [{"ticker": "X", "position": -10, "market_exposure": 159000}])
+    a, r = manage((0.10, 50, 0.12), EVENT_3PM, auth=big)
+    assert not a.sent and r["skipped"] == [(T, "open-cost cap")]
+    poor = FakeAuth(cash=10, positions=held())
+    a, r = manage((0.10, 50, 0.12), EVENT_3PM, auth=poor, start=0)
+    assert not a.sent and r["skipped"] == [(T, "not enough cash")]
+
+
+def test_manage_skips_resting_orders_other_series_and_finished_days():
+    a = FakeAuth(cash=1500, positions=held(), orders=[{"ticker": T}])
+    a, _ = manage((0.10, 50, 0.12), EVENT_3PM, auth=a)
+    assert not a.sent
+    other = FakeAuth(cash=1500, positions=[{"ticker": "KXHIGHMIA-26NOV05-B80.5", "position": -30}])
+    other, _ = manage((0.10, 50, 0.12), EVENT_3PM, auth=other)
+    assert not other.sent
+    a, _ = manage((0.30, 40, 0.35), datetime(2026, 11, 6, 12, 0, tzinfo=timezone.utc))  # day after
+    assert not getattr(a, "sold", []) and not a.sent
+
+
+def test_sell_order_buys_yes_at_complement():
+    class S:
+        def request(self, method, url, params=None, json=None, headers=None, timeout=None):
+            S.sent = json
+            class R:
+                status_code, content = 201, b"x"
+                def json(self):
+                    return {"order_id": "o2", "fill_count": "30.00", "remaining_count": "0.00"}
+            return R()
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    pem = Ed25519PrivateKey.generate().private_bytes(serialization.Encoding.PEM,
+                                                     serialization.PrivateFormat.PKCS8,
+                                                     serialization.NoEncryption()).decode()
+    c = live.AuthClient("https://api.elections.kalshi.com/trade-api/v2", "k", pem, session=S())
+    o = c.sell_no(T, 65, 30)
+    assert S.sent["side"] == "bid" and S.sent["price"] == "0.35" and S.sent["count"] == "30"
+    assert o["status"] == "filled 30"
+
+
+def test_results_count_a_late_sell():
+    fills = [{"ticker": T, "book_side": "ask", "count_fp": "30", "no_price_dollars": "0.99",
+              "fee_cost": "0.03", "created_time": "2026-11-04T22:01:00Z"},
+             {"ticker": T, "book_side": "bid", "count_fp": "30", "yes_price_dollars": "0.35",
+              "fee_cost": "0.48", "created_time": "2026-11-06T00:05:00Z"}]
+    r = live.trade_results(fills, [], now=datetime(2026, 11, 6, 1, 0, tzinfo=timezone.utc))
+    # paid 29.70 + 0.03, got back 30 x 0.65 - 0.48 = 19.02 -> -10.71
+    assert r["all"] == {"settled": 1, "losses": 1, "pnl": -10.71} and r["day"]["settled"] == 1
