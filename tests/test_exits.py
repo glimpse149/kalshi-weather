@@ -86,3 +86,20 @@ def test_collect_market_keeps_only_1_2c_entries(monkeypatch):
     assert [t["ticker"] for t in out] == ["KXHIGHNY-26NOV12-B61.5"]
     assert out[0]["entry_bid"] == 0.02 and len(out[0]["path"]) == 2
     assert exits.simulate(out[0], stop=0.80)["stopped"] == 0.01
+
+
+def test_late_stop_ignores_early_dips():
+    # dip to 0.70 early, then recovers; late stop (last 2h) never fires
+    t = trade([0.95, 0.70, 0.97, 0.98, 0.99])
+    assert exits.simulate(t, stop=0.80)["stopped"] == 0.70
+    r = exits.simulate(t, stop=0.80, stop_last=2)
+    assert r["stopped"] is None and r["pnl"] > 0
+    # a late crash is still caught
+    late = trade([0.97, 0.98, 0.99, 0.75, 0.10], result="yes")
+    assert exits.simulate(late, stop=0.80, stop_last=2)["stopped"] == 0.75
+
+
+def test_report_six_only_skips_whole_market():
+    text = exits.report([trade([0.98, 0.99])], 120, keys=exits.LIVE_SIX)
+    assert "## Your 6 live cities" in text and "Whole market" not in text
+    assert "last 6h only" in text
