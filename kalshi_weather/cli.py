@@ -178,6 +178,11 @@ def main(argv=None):
             print("live: real-money orders only run inside the 5-9pm window; use --scheduled")
             return
         if a.scheduled:
+            if auth is not None:      # late sell / buy again on open positions, any hour
+                from .live import manage
+                m = manage(mode, market, auth, start_equity=start)
+                print(f"live ({mode}) manage: {len(m['sold'])} sold, {len(m['added'])} bought again, "
+                      f"{len(m['skipped'])} skipped")
             cities = in_window(cities)
             if not cities:
                 print(f"live: no live city is between {LIVE_HOUR}:00 and {LIVE_LAST_HOUR}:59 local right now")
