@@ -9,6 +9,7 @@ Entry (the live rule): best YES bid 1-2c at 5pm local the day before, so buy NO 
   add L-H, Xh   buy 30 more NO the first hour its ask (1 - YES bid) is within L-H,
                 during the last X hours of the event day ("any" = any time after entry)
   stop + add    both rules together; a stop sells every contract held at that point
+  late stop     stop T, but only during the last X hours of the event day
 
 Every buy and sell pays the taker fee. Prices are hourly closes, so this matches a bot
 that checks once an hour; anything that happens inside an hour is not seen.
@@ -35,6 +36,7 @@ STOPS = (0.90, 0.85, 0.80, 0.75, 0.70, 0.60, 0.50)
 ADDS = ((0.85, 0.93, None), (0.85, 0.93, 12), (0.85, 0.93, 6), (0.85, 0.93, 3),
         (0.88, 0.95, 6), (0.80, 0.90, 6))
 COMBOS = ((0.80, (0.85, 0.93, 6)), (0.75, (0.85, 0.93, 6)), (0.70, (0.88, 0.95, 6)))
+LATE_STOPS = tuple((s, h) for s in (0.80, 0.70, 0.60) for h in (3, 6, 9, 12))
 
 
 def groups() -> dict[str, tuple[str, ...]]:
@@ -108,8 +110,10 @@ def collect(keys, days: int, cache_dir: str | None, workers: int = 3, log=print)
 
 # ---------- simulation ----------
 
-def simulate(t: dict, stop: float | None = None, add: tuple | None = None) -> dict:
-    """P&L of one trade under the rules, plus what happened (stopped, added)."""
+def simulate(t: dict, stop: float | None = None, add: tuple | None = None,
+             stop_last: int | None = None) -> dict:
+    """P&L of one trade under the rules, plus what happened (stopped, added).
+    stop_last: the stop only acts during the last N hours of the event day."""
     won = t["result"] == "no"
     p0 = round(1 - t["entry_bid"], 4)
     legs = [(p0, N)]
@@ -124,7 +128,7 @@ def simulate(t: dict, stop: float | None = None, add: tuple | None = None) -> di
                 legs.append((no_ask, N))
                 cash -= no_ask * N + taker_fee(no_ask, N)
                 added_at = no_ask
-        if stop and ya is not None:
+        if stop and ya is not None and (stop_last is None or t["day_end"] - ts <= stop_last * 3600):
             no_bid = round(1 - ya, 4)
             if no_bid < stop - 1e-9:
                 held = sum(n for _, n in legs)
@@ -137,8 +141,8 @@ def simulate(t: dict, stop: float | None = None, add: tuple | None = None) -> di
 
 
 def rule_rows(trades: list[dict]) -> list[str]:
-    def run(name, stop=None, add=None):
-        r = [simulate(t, stop, add) for t in trades]
+    def run(name, stop=None, add=None, last=None):
+        r = [simulate(t, stop, add, last) for t in trades]
         pnl = sum(x["pnl"] for x in r)
         st = [x for x in r if x["stopped"] is not None]
         ad = [x for x in r if x["added"] is not None]
@@ -151,6 +155,7 @@ def rule_rows(trades: list[dict]) -> list[str]:
 
     rows = ["| Rule | Total P&L (30 contracts) | What it did |", "|---|---|---|", run("Hold to settlement")]
     rows += [run(f"Sell if NO bid < {s * 100:.0f}c", stop=s) for s in STOPS]
+    rows += [run(f"Sell if NO bid < {s * 100:.0f}c, last {h}h only", stop=s, last=h) for s, h in LATE_STOPS]
     for lo, hi, last in ADDS:
         when = "any time" if last is None else f"last {last}h"
         rows.append(run(f"Buy again at {lo * 100:.0f}-{hi * 100:.0f}c, {when}", add=(lo, hi, last)))
@@ -160,13 +165,15 @@ def rule_rows(trades: list[dict]) -> list[str]:
     return rows
 
 
-def report(trades: list[dict], days: int) -> str:
+def report(trades: list[dict], days: int, keys=None) -> str:
     dates = sorted(t["date"] for t in trades)
     out = ["# Exit-rule backtest (hourly Kalshi prices)", "",
            f"Entry: YES bid 1-2c at 5pm local the day before, buy 30 NO. Event days {dates[0] if dates else '-'} "
            f"to {dates[-1] if dates else '-'} (last {days} days). Checks once an hour; taker fees on every buy and sell.", ""]
-    for name, keys in groups().items():
-        g = [t for t in trades if t["market"] in keys]
+    for name, gkeys in groups().items():
+        if keys is not None and not set(gkeys) <= set(keys):
+            continue
+        g = [t for t in trades if t["market"] in gkeys]
         losses = [t for t in g if t["result"] != "no"]
         out += [f"## {name}", "", f"{len(g)} trades, {len(losses)} losses "
                 f"({len(losses) / len(g):.2%} loss rate)" if g else "No trades.", ""]
@@ -181,12 +188,14 @@ def report(trades: list[dict], days: int) -> str:
     return "\n".join(out)
 
 
-def main(days: int = 120, out_dir: str = "lab", cache_dir: str | None = None, log=print) -> str:
-    trades = collect(tuple(MARKETS), days, cache_dir, log=log)
+def main(days: int = 120, out_dir: str = "lab", cache_dir: str | None = None, log=print,
+         keys=None) -> str:
+    keys = tuple(keys or MARKETS)
+    trades = collect(keys, days, cache_dir, log=log)
     os.makedirs(out_dir, exist_ok=True)
     with gzip.open(os.path.join(out_dir, "exit_paths.json.gz"), "wt") as f:
         json.dump(trades, f)
-    text = report(trades, days)
+    text = report(trades, days, keys)
     with open(os.path.join(out_dir, "exits_report.md"), "w") as f:
         f.write(text + "\n")
     return text
