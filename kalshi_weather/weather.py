@@ -57,6 +57,18 @@ class WeatherClient:
                 out[date.fromisoformat(t)] = sum(vals) / len(vals)
         return out
 
+    def forecast_model_highs(self, city: City, days: int = 3) -> dict[date, list[float]]:
+        """Each model's forecast daily high (not the average), so a split forecast shows."""
+        p = self._base(city) | {"daily": "temperature_2m_max", "forecast_days": days}
+        daily = self._get(FORECAST_URL, p).get("daily", {})
+        cols = _series(daily, "temperature_2m_max")
+        out = {}
+        for i, t in enumerate(daily.get("time", [])):
+            vals = [c[i] for c in cols if i < len(c) and c[i] is not None]
+            if vals:
+                out[date.fromisoformat(t)] = vals
+        return out
+
     def historical_highs(self, city: City, start: date, end: date, decision_hour: int = 15,
                          latency_hours: int = 8, by_model: bool = False) -> dict:
         """Forecast daily high per day, using only runs published by the decision time.
