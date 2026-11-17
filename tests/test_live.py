@@ -1,6 +1,6 @@
 """Live trading: signing and every safety check, with fake exchanges (no network)."""
 import base64
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 from cryptography.hazmat.primitives import hashes, serialization
@@ -26,6 +26,9 @@ class FakeMarket:
     def orderbook(self, ticker):
         bid, qty, ask = self.books[ticker]
         return {"yes_bid": bid, "yes_bid_qty": qty, "yes_ask": ask, "yes_ask_qty": 100}
+
+    def market(self, ticker):
+        return Bracket(ticker, EV, "between", 62, 63, None, None, None, None)   # 62-63F
 
 
 class FakeAuth:
@@ -234,9 +237,20 @@ def held(n=30):
     return [{"ticker": T, "position": -n, "market_exposure": n * 99}]
 
 
-def manage(book, now, auth=None, start=1500):
+class FakeWeather:
+    def __init__(self, highs=(75.0, 76.0, 74.0), fail=False):
+        self.highs, self.fail = list(highs), fail
+
+    def forecast_model_highs(self, city, days=3):
+        if self.fail:
+            raise RuntimeError("down")
+        return {date(2026, 11, 5): self.highs}
+
+
+def manage(book, now, auth=None, start=1500, weather=None, observed=50.0):
     a = auth or FakeAuth(cash=1500, positions=held())
-    r = live.manage("live", FakeMarket({T: book}), a, now=now, start_equity=start, log=lambda *_: None)
+    r = live.manage("live", FakeMarket({T: book}), a, now=now, start_equity=start, log=lambda *_: None,
+                    weather=weather or FakeWeather(), observe=lambda city, now: observed)
     return a, r
 
 
@@ -324,3 +338,75 @@ def test_results_count_a_late_sell():
     r = live.trade_results(fills, [], now=datetime(2026, 11, 6, 1, 0, tzinfo=timezone.utc))
     # paid 29.70 + 0.03, got back 30 x 0.65 - 0.48 = 19.02 -> -10.71
     assert r["all"] == {"settled": 1, "losses": 1, "pnl": -10.71} and r["day"]["settled"] == 1
+
+
+# ---------- weather check on buy-again ----------
+
+def test_no_buy_again_when_a_model_forecasts_inside_the_bracket():
+    # Denver, Nov 17: models 68.1 / 67.2 / 62.6 for a 62-63F bracket -> skip
+    a, r = manage((0.10, 50, 0.12), EVENT_3PM, weather=FakeWeather((68.1, 67.2, 62.6)))
+    assert not a.sent and r["skipped"][0][1].startswith("forecast 62.6F")
+
+
+def test_no_buy_again_when_forecast_within_3f():
+    a, r = manage((0.10, 50, 0.12), EVENT_3PM, weather=FakeWeather((66.0, 66.4, 66.2)))   # 2.5F above 63.5
+    assert not a.sent
+    a, r = manage((0.10, 50, 0.12), EVENT_3PM, weather=FakeWeather((67.0, 68.0, 69.0)))   # 3.5F+ away
+    assert a.sent == [(T, 90, 30)]
+
+
+def test_no_buy_again_when_todays_observed_high_is_close():
+    a, r = manage((0.10, 50, 0.12), EVENT_3PM, observed=59.5)       # 2F below 61.5
+    assert not a.sent and "observed high" in r["skipped"][0][1]
+    a, r = manage((0.10, 50, 0.12), EVENT_3PM, observed=62.6)       # inside the bracket
+    assert not a.sent
+    a, r = manage((0.10, 50, 0.12), EVENT_3PM, observed=58.0)       # 3.5F below
+    assert a.sent == [(T, 90, 30)]
+    a, r = manage((0.10, 50, 0.12), EVENT_3PM, observed=66.0)       # already past the bracket
+    assert a.sent == [(T, 90, 30)]
+
+
+def test_observed_high_only_checked_on_the_event_day():
+    a, r = manage((0.10, 50, 0.12), NOW, observed=62.0)             # evening before: forecast only
+    assert a.sent == [(T, 90, 30)]
+
+
+def test_no_buy_again_without_weather():
+    a, r = manage((0.10, 50, 0.12), EVENT_3PM, weather=FakeWeather(fail=True))
+    assert not a.sent and r["skipped"][0][1].startswith("no forecast")
+    a, r = manage((0.10, 50, 0.12), EVENT_3PM, observed=None)
+    assert not a.sent and r["skipped"][0][1] == "no observations"
+
+
+def test_weather_check_lower_tail_ignores_morning_observations():
+    from kalshi_weather.config import CITIES
+    low = Bracket(T, EV, "less", None, 62, None, None, None, None)            # 61F or below
+    ok, _ = live.weather_allows_add(CITIES["nyc"], low, date(2026, 11, 5), EVENT_3PM,
+                                    FakeWeather((70.0, 71.0, 69.0)), observe=lambda c, n: 45.0)
+    assert ok
+
+
+def test_late_sell_ignores_the_weather_check():
+    a, r = manage((0.30, 40, 0.35), EVENT_7PM, weather=FakeWeather(fail=True))
+    assert a.sold == [(T, 65, 30)]
+
+
+def test_observed_max_reads_nws(monkeypatch):
+    from kalshi_weather.config import CITIES
+
+    class R:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"features": [{"properties": {"temperature": {"value": 17.0}}},
+                                 {"properties": {"temperature": {"value": None}}},
+                                 {"properties": {"temperature": {"value": 13.0}}}]}
+
+    class S:
+        def get(self, url, params=None, timeout=None, headers=None):
+            S.url, S.params = url, params
+            return R()
+
+    m = live.observed_max(CITIES["den"], EVENT_3PM, session=S())
+    assert round(m, 1) == 62.6 and "KDEN" in S.url and S.params["start"].startswith("2026-11-05T00:00:00-07:00")
