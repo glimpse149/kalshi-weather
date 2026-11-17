@@ -25,6 +25,10 @@ Managing open positions (2026-11-15, every run, any hour; backtest +$381 vs +$24
     bid is at least 20c, so an empty book can't trigger it), sell the whole position
   - buy again: once per position, if the NO ask is 85-93c, buy 30 more NO (any time
     before the event day ends); counts against the open-money cap, cash and the stop
+  - weather check (2026-11-17, after Denver 62-63F): no buy-again if any forecast model's
+    high is within 3F of the bracket, or (on the event day) the high observed so far at
+    the settlement station is inside the bracket or within 3F below it. If the weather
+    can't be fetched, no buy-again.
 GitHub Actions logs on a public repo are public, so balances go to Telegram only.
 """
 from __future__ import annotations
@@ -56,6 +60,8 @@ STOP_FROM_HOUR = 18            # ...from 6pm local on the event day (its last 6 
 STOP_MIN_YES_BID = 0.20        # ...confirmed by a real YES bid, not an empty book
 ADD_MIN_NO, ADD_MAX_NO = 85, 93   # buy again when the NO ask is in this band...
 ADD_CONTRACTS = 30             # ...this many more, once per position
+ADD_MIN_GAP_F = 3.0            # ...only if forecasts and today's observed high stay this far away
+NWS_OBS = "https://api.weather.gov/stations/{station}/observations"
 
 
 class LiveError(RuntimeError):
@@ -271,6 +277,54 @@ def _no_price(f: dict) -> float:
     return p
 
 
+def _gap(bounds: tuple[float, float], x: float) -> float:
+    """Degrees F from x to the bracket (0 when inside)."""
+    lo, hi = bounds
+    return 0.0 if lo <= x <= hi else (lo - x if x < lo else x - hi)
+
+
+def observed_max(city, now: datetime, session=None) -> float | None:
+    """Highest temperature (F) reported at the city's settlement station since local midnight."""
+    tz = ZoneInfo(city.tz)
+    start = datetime.combine(now.astimezone(tz).date(), datetime.min.time(), tz)
+    r = (session or requests).get(NWS_OBS.format(station=city.station),
+                                  params={"start": start.isoformat()}, timeout=20,
+                                  headers={"User-Agent": "kalshi-weather (github.com/glimpse149/kalshi-weather)",
+                                           "Accept": "application/geo+json"})
+    r.raise_for_status()
+    temps = [f["properties"]["temperature"]["value"] for f in r.json().get("features", [])]
+    temps = [t * 9 / 5 + 32 for t in temps if t is not None]
+    return max(temps) if temps else None
+
+
+def weather_allows_add(city, bracket, d, now: datetime, weather, observe=observed_max) -> tuple[bool, str]:
+    """Buy again only when the weather is clearly away from this bracket."""
+    from .model import bracket_bounds
+    bounds = bracket_bounds(bracket)
+    if bounds is None:
+        return False, "unknown bracket"
+    try:
+        highs = weather.forecast_model_highs(city, days=3).get(d) or []
+    except Exception as e:
+        return False, f"no forecast ({type(e).__name__})"
+    if not highs:
+        return False, "no forecast"
+    near = [h for h in highs if _gap(bounds, h) < ADD_MIN_GAP_F]
+    if near:
+        return False, f"forecast {min(near, key=lambda h: _gap(bounds, h)):.1f}F near bracket"
+    if now.astimezone(ZoneInfo(city.tz)).date() == d and bounds[0] != float("-inf"):
+        try:
+            m = observe(city, now)
+        except Exception as e:
+            return False, f"no observations ({type(e).__name__})"
+        if m is None:
+            return False, "no observations"
+        lo, hi = bounds
+        if m <= hi and lo - m < ADD_MIN_GAP_F:
+            return False, f"observed high {m:.1f}F near bracket"
+    return True, ""
+
+
 def added_tickers(fills: list[dict]) -> set[str]:
     """Tickers already bought again: any NO buy below 97c (first entries are 98-99c)."""
     return {f.get("ticker") or f.get("market_ticker") for f in fills
@@ -278,7 +332,7 @@ def added_tickers(fills: list[dict]) -> set[str]:
 
 
 def manage(mode: str, market, auth: AuthClient, now=None, start_equity: float | None = None,
-           log=print) -> dict:
+           log=print, weather=None, observe=observed_max) -> dict:
     """Late sell and buy-again on open NO positions in the live cities. Runs any hour."""
     from .kalshi import event_date
     from .strategy import taker_fee
@@ -329,6 +383,17 @@ def manage(mode: str, market, auth: AuthClient, now=None, start_equity: float | 
             continue
         count = min(ADD_CONTRACTS, int(q.get("yes_bid_qty") or 0))
         if count <= 0:
+            continue
+        if weather is None:
+            from .weather import WeatherClient
+            weather = WeatherClient()
+        try:
+            ok, why = weather_allows_add(city, market.market(t), d, now, weather, observe)
+        except Exception as e:
+            ok, why = False, f"weather check failed ({type(e).__name__})"
+        if not ok:
+            out["skipped"].append((t, why))
+            log(f"skip buy-again {t}: {why}")
             continue
         cost = count * no_ask / 100.0 + taker_fee(no_ask / 100.0, count)
         why = ("open-cost cap" if tied + cost > MAX_OPEN_COST else
