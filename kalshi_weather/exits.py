@@ -10,6 +10,9 @@ Entry (the live rule): best YES bid 1-2c at 5pm local the day before, so buy NO 
                 during the last X hours of the event day ("any" = any time after entry)
   stop + add    both rules together; a stop sells every contract held at that point
   late stop     stop T, but only during the last X hours of the event day
+  flip T        when the NO bid falls below T, buy YES for twice the NO held: the first
+                half closes the NO (same as a stop), the second half is a new YES bet that
+                pays $1 each if the bracket hits
 
 Every buy and sell pays the taker fee. Prices are hourly closes, so this matches a bot
 that checks once an hour; anything that happens inside an hour is not seen.
@@ -37,6 +40,7 @@ ADDS = ((0.85, 0.93, None), (0.85, 0.93, 12), (0.85, 0.93, 6), (0.85, 0.93, 3),
         (0.88, 0.95, 6), (0.80, 0.90, 6))
 COMBOS = ((0.80, (0.85, 0.93, 6)), (0.75, (0.85, 0.93, 6)), (0.70, (0.88, 0.95, 6)))
 LATE_STOPS = tuple((s, h) for s in (0.80, 0.70, 0.60) for h in (3, 6, 9, 12))
+FLIPS = (0.80, 0.70, 0.60, 0.50)
 # late-day stop + buy again (doubling to 60 contracts): (stop, stop hours, add rule)
 LATE_COMBOS = tuple((s, 6, a) for s in (0.70, 0.80) for a in ADDS)
 
@@ -113,7 +117,7 @@ def collect(keys, days: int, cache_dir: str | None, workers: int = 3, log=print)
 # ---------- simulation ----------
 
 def simulate(t: dict, stop: float | None = None, add: tuple | None = None,
-             stop_last: int | None = None) -> dict:
+             stop_last: int | None = None, flip: bool = False) -> dict:
     """P&L of one trade under the rules, plus what happened (stopped, added).
     stop_last: the stop only acts during the last N hours of the event day."""
     won = t["result"] == "no"
@@ -136,6 +140,8 @@ def simulate(t: dict, stop: float | None = None, add: tuple | None = None,
                 held = sum(n for _, n in legs)
                 cash += no_bid * held - taker_fee(no_bid, held)
                 stopped_at = no_bid
+                if flip:                        # a new YES bet of the same size
+                    cash += -(ya * held) - taker_fee(ya, held) + (held if not won else 0.0)
                 return {"pnl": round(cash, 2), "won": won, "stopped": stopped_at, "added": added_at}
     held = sum(n for _, n in legs)
     cash += held if won else 0.0
@@ -143,8 +149,8 @@ def simulate(t: dict, stop: float | None = None, add: tuple | None = None,
 
 
 def rule_rows(trades: list[dict]) -> list[str]:
-    def run(name, stop=None, add=None, last=None):
-        r = [simulate(t, stop, add, last) for t in trades]
+    def run(name, stop=None, add=None, last=None, flip=False):
+        r = [simulate(t, stop, add, last, flip) for t in trades]
         pnl = sum(x["pnl"] for x in r)
         st = [x for x in r if x["stopped"] is not None]
         ad = [x for x in r if x["added"] is not None]
@@ -159,6 +165,7 @@ def rule_rows(trades: list[dict]) -> list[str]:
     rows = ["| Rule | Total P&L (30 contracts) | What it did |", "|---|---|---|", run("Hold to settlement")]
     rows += [run(f"Sell if NO bid < {s * 100:.0f}c", stop=s) for s in STOPS]
     rows += [run(f"Sell if NO bid < {s * 100:.0f}c, last {h}h only", stop=s, last=h) for s, h in LATE_STOPS]
+    rows += [run(f"Flip: NO bid < {s * 100:.0f}c -> sell NO + buy 30 YES", stop=s, flip=True) for s in FLIPS]
     for lo, hi, last in ADDS:
         when = "any time" if last is None else f"last {last}h"
         rows.append(run(f"Buy again at {lo * 100:.0f}-{hi * 100:.0f}c, {when}", add=(lo, hi, last)))
