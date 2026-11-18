@@ -113,3 +113,12 @@ def test_late_stop_plus_add_sells_all_60():
     exp = (-0.98 * 30 - taker_fee(0.98, 30)) + (-0.90 * 30 - taker_fee(0.90, 30)) + 0.60 * 60 - taker_fee(0.60, 60)
     assert r["pnl"] == round(exp, 2)
     assert "last 6h only + buy again" in exits.report([t], 120, keys=exits.LIVE_SIX)
+
+
+def test_flip_sells_no_and_holds_yes():
+    # NO bid falls to 0.50 (YES ask 0.50): close 30 NO at 0.50, buy 30 YES at 0.50
+    lose = exits.simulate(trade([0.95, 0.50, 0.05], result="yes"), stop=0.60, flip=True)
+    win = exits.simulate(trade([0.95, 0.50, 0.99]), stop=0.60, flip=True)
+    base = -0.98 * 30 - taker_fee(0.98, 30) + 0.50 * 30 - taker_fee(0.50, 30) - 0.50 * 30 - taker_fee(0.50, 30)
+    assert lose["pnl"] == round(base + 30, 2) and win["pnl"] == round(base, 2)
+    assert "Flip: NO bid < 50c" in exits.report([trade([0.98, 0.99])], 120, keys=exits.LIVE_SIX)
